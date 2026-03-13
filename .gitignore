@@ -1,0 +1,20 @@
+# Go
+kvm-switcher
+*.exe
+
+# Node
+node_modules/
+
+# SvelteKit
+web/.svelte-kit/
+web/build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Environment
+.env

@@ -1,0 +1,62 @@
+export interface ServerInfo {
+	name: string;
+	bmc_ip: string;
+	bmc_port: number;
+	board_type: string;
+	has_active_session: boolean;
+}
+
+export interface KVMSession {
+	id: string;
+	server_name: string;
+	bmc_ip: string;
+	status: 'starting' | 'connected' | 'disconnected' | 'error';
+	container_id?: string;
+	websocket_port?: number;
+	created_at: string;
+	last_activity: string;
+	error?: string;
+}
+
+const API_BASE = '/api';
+
+export async function fetchServers(): Promise<ServerInfo[]> {
+	const res = await fetch(`${API_BASE}/servers`);
+	if (!res.ok) throw new Error(`Failed to fetch servers: ${res.statusText}`);
+	return res.json();
+}
+
+export async function createSession(serverName: string): Promise<KVMSession> {
+	const res = await fetch(`${API_BASE}/sessions`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ server_name: serverName })
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
+	return res.json();
+}
+
+export async function getSession(id: string): Promise<KVMSession> {
+	const res = await fetch(`${API_BASE}/sessions/${id}`);
+	if (!res.ok) throw new Error(`Failed to get session: ${res.statusText}`);
+	return res.json();
+}
+
+export async function deleteSession(id: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${id}`, { method: 'DELETE' });
+	if (!res.ok) throw new Error(`Failed to delete session: ${res.statusText}`);
+}
+
+export async function listSessions(): Promise<KVMSession[]> {
+	const res = await fetch(`${API_BASE}/sessions`);
+	if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
+	return res.json();
+}
+
+export function getKVMWebSocketURL(sessionId: string): string {
+	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+	return `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
+}

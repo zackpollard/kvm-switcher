@@ -1,0 +1,21 @@
+servers:
+  - name: "brock"
+    bmc_ip: "10.10.11.251"
+    bmc_port: 80
+    board_type: "ami_megarac"
+    username: "admin"
+    credential_env: "BMC_PASSWORD_BROCK"
+
+  - name: "node-2"
+    bmc_ip: "10.10.11.14"
+    bmc_port: 80
+    board_type: "ami_megarac"
+    username: "admin"
+    credential_env: "BMC_PASSWORD_NODE2"
+
+settings:
+  max_concurrent_sessions: 4
+  session_timeout_minutes: 60
+  idle_timeout_minutes: 30
+  docker_image: "kvm-switcher/jviewer:latest"
+  listen_address: "0.0.0.0:8080"
