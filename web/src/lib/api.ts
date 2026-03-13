@@ -60,3 +60,17 @@ export function getKVMWebSocketURL(sessionId: string): string {
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 	return `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
 }
+
+export interface AuthStatus {
+	authenticated: boolean;
+	oidc_enabled?: boolean;
+	email?: string;
+	name?: string;
+	roles?: string[];
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+	const res = await fetch('/auth/me');
+	if (!res.ok) throw new Error('Failed to fetch auth status');
+	return res.json();
+}

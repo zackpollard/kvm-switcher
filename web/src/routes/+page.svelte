@@ -11,7 +11,13 @@
 		try {
 			loading = true;
 			error = '';
-			servers = await fetchServers();
+			const res = await fetch('/api/servers');
+			if (res.status === 401) {
+				window.location.href = '/auth/login';
+				return;
+			}
+			if (!res.ok) throw new Error(`Failed to fetch servers: ${res.statusText}`);
+			servers = await res.json();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load servers';
 		} finally {

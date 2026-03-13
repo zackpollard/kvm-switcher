@@ -28,3 +28,22 @@ settings:
   session_timeout_minutes: 60
   idle_timeout_minutes: 30
   listen_address: "0.0.0.0:8080"
+
+# Optional: OIDC authentication with role-based server access
+# When enabled, users must authenticate via OIDC and can only access
+# servers their roles grant them permission to.
+# oidc:
+#   enabled: true
+#   issuer_url: "https://auth.example.com/realms/myorg"
+#   client_id: "kvm-switcher"
+#   client_secret_env: "OIDC_CLIENT_SECRET"
+#   redirect_url: "http://localhost:8080/auth/callback"
+#   scopes: ["openid", "profile", "email", "groups"]
+#   role_claim: "groups"   # JWT claim containing user roles/groups
+#   role_mappings:
+#     admin:
+#       servers: ["*"]     # wildcard grants access to all servers
+#     ops-team:
+#       servers: ["server-1", "server-2"]
+#     dev-team:
+#       servers: ["server-1"]

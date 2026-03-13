@@ -11,6 +11,7 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/config"
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 
 	"github.com/google/uuid"
 )
@@ -44,16 +45,25 @@ type ServerInfo struct {
 
 // ListServers handles GET /api/servers.
 func (s *Server) ListServers(w http.ResponseWriter, r *http.Request) {
-	servers := make([]ServerInfo, len(s.Config.Servers))
-	for i, srv := range s.Config.Servers {
+	user := kvmoidc.UserFromContext(r.Context())
+	oidcEnabled := s.Config.OIDC.Enabled
+
+	var servers []ServerInfo
+	for _, srv := range s.Config.Servers {
+		if oidcEnabled && !kvmoidc.UserCanAccessServer(&s.Config.OIDC, user, srv.Name) {
+			continue
+		}
 		_, hasSession := s.Sessions.FindByServer(srv.Name)
-		servers[i] = ServerInfo{
+		servers = append(servers, ServerInfo{
 			Name:      srv.Name,
 			BMCIP:     srv.BMCIP,
 			BMCPort:   srv.BMCPort,
 			BoardType: srv.BoardType,
 			HasActive: hasSession,
-		}
+		})
+	}
+	if servers == nil {
+		servers = []ServerInfo{}
 	}
 	writeJSON(w, http.StatusOK, servers)
 }
@@ -82,6 +92,15 @@ func (s *Server) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if serverCfg == nil {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
+	}
+
+	// Check OIDC authorization
+	if s.Config.OIDC.Enabled {
+		user := kvmoidc.UserFromContext(r.Context())
+		if !kvmoidc.UserCanAccessServer(&s.Config.OIDC, user, req.ServerName) {
+			writeError(w, http.StatusForbidden, "access denied to this server")
+			return
+		}
 	}
 
 	// Check if there's already an active session
