@@ -1,0 +1,30 @@
+servers:
+  - name: "server-1"
+    bmc_ip: "10.10.11.251"
+    bmc_port: 80
+    board_type: "ami_megarac"
+    username: "admin"
+    credential_env: "BMC_PASSWORD_SERVER1"
+
+  - name: "server-2"
+    bmc_ip: "10.10.11.14"
+    bmc_port: 80
+    board_type: "ami_megarac"
+    username: "admin"
+    credential_env: "BMC_PASSWORD_SERVER2"
+
+settings:
+  # Container runtime: "docker" or "kubernetes"
+  runtime: "docker"
+
+  # Container image for KVM sessions (used by both runtimes)
+  container_image: "kvm-switcher/jviewer:latest"
+
+  # Kubernetes settings (only used when runtime is "kubernetes")
+  # kube_namespace: "kvm-switcher"    # namespace for KVM pods (must exist)
+  # kube_config: ""                   # path to kubeconfig; leave empty for in-cluster
+
+  max_concurrent_sessions: 4
+  session_timeout_minutes: 60
+  idle_timeout_minutes: 30
+  listen_address: "0.0.0.0:8080"

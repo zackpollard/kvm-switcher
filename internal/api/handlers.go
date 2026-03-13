@@ -9,7 +9,7 @@ import (
 
 	"github.com/zackpollard/kvm-switcher/internal/auth"
 	"github.com/zackpollard/kvm-switcher/internal/config"
-	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"
+	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 
 	"github.com/google/uuid"
@@ -17,19 +17,19 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	Config       *models.AppConfig
-	Sessions     *models.SessionStore
-	Docker       *dockermgr.Manager
-	BMCCreds     map[string]*models.BMCCredentials // session ID -> BMC creds for logout
+	Config    *models.AppConfig
+	Sessions  *models.SessionStore
+	Container containermgr.Manager
+	BMCCreds  map[string]*models.BMCCredentials // session ID -> BMC creds for logout
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg *models.AppConfig, docker *dockermgr.Manager) *Server {
+func NewServer(cfg *models.AppConfig, cm containermgr.Manager) *Server {
 	return &Server{
-		Config:   cfg,
-		Sessions: models.NewSessionStore(),
-		Docker:   docker,
-		BMCCreds: make(map[string]*models.BMCCredentials),
+		Config:    cfg,
+		Sessions:  models.NewSessionStore(),
+		Container: cm,
+		BMCCreds:  make(map[string]*models.BMCCredentials),
 	}
 }
 
@@ -159,7 +159,7 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 
 	// Start Docker container
 	log.Printf("Session %s: starting Docker container for %s...", session.ID, serverCfg.Name)
-	wsPort, err := s.Docker.StartContainer(ctx, session, args)
+	wsPort, err := s.Container.StartContainer(ctx, session, args)
 	if err != nil {
 		log.Printf("Session %s: failed to start container: %v", session.ID, err)
 		session.Status = models.SessionError
@@ -188,7 +188,7 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 
 	// Check if container is still running
 	if session.Status == models.SessionConnected && session.ContainerID != "" {
-		if !s.Docker.IsContainerRunning(r.Context(), session.ContainerID) {
+		if !s.Container.IsContainerRunning(r.Context(), session.ContainerID) {
 			session.Status = models.SessionDisconnected
 			s.Sessions.Set(session)
 		}
@@ -216,7 +216,7 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	// Stop the Docker container
 	if session.ContainerID != "" {
 		log.Printf("Session %s: stopping container...", id)
-		if err := s.Docker.StopContainer(ctx, session.ContainerID); err != nil {
+		if err := s.Container.StopContainer(ctx, session.ContainerID); err != nil {
 			log.Printf("Session %s: error stopping container: %v", id, err)
 		}
 	}

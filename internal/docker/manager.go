@@ -13,8 +13,11 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
+
+var _ containermgr.Manager = (*Manager)(nil)
 
 // Manager handles Docker container lifecycle for KVM sessions.
 type Manager struct {

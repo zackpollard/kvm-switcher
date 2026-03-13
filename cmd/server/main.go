@@ -13,7 +13,9 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/api"
 	_ "github.com/zackpollard/kvm-switcher/internal/auth" // Register authenticators
 	"github.com/zackpollard/kvm-switcher/internal/config"
+	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"
+	k8smgr "github.com/zackpollard/kvm-switcher/internal/kubernetes"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
 
@@ -32,20 +34,30 @@ func main() {
 	}
 	log.Printf("Loaded %d server(s) from config", len(cfg.Servers))
 
-	// Initialize Docker manager
-	docker, err := dockermgr.NewManager(cfg.Settings.DockerImage)
-	if err != nil {
-		log.Fatalf("Failed to initialize Docker: %v", err)
+	// Initialize container manager based on runtime
+	var cm containermgr.Manager
+	switch cfg.Settings.Runtime {
+	case "kubernetes":
+		log.Println("Using Kubernetes runtime")
+		cm, err = k8smgr.NewManager(cfg.Settings.ContainerImage, cfg.Settings.KubeNamespace, cfg.Settings.KubeConfig)
+	case "docker":
+		log.Println("Using Docker runtime")
+		cm, err = dockermgr.NewManager(cfg.Settings.ContainerImage)
+	default:
+		log.Fatalf("Unknown runtime: %s", cfg.Settings.Runtime)
 	}
-	defer docker.Close()
+	if err != nil {
+		log.Fatalf("Failed to initialize container runtime: %v", err)
+	}
+	defer cm.Close()
 
 	// Clean up any orphaned containers from previous runs
-	if err := docker.CleanupOrphans(context.Background()); err != nil {
+	if err := cm.CleanupOrphans(context.Background()); err != nil {
 		log.Printf("Warning: failed to cleanup orphans: %v", err)
 	}
 
 	// Create API server
-	srv := api.NewServer(cfg, docker)
+	srv := api.NewServer(cfg, cm)
 
 	// Set up routes
 	mux := http.NewServeMux()
@@ -111,7 +123,7 @@ func main() {
 	for _, session := range srv.Sessions.List() {
 		if session.ContainerID != "" {
 			log.Printf("Stopping session %s container...", session.ID)
-			_ = docker.StopContainer(ctx, session.ContainerID)
+			_ = cm.StopContainer(ctx, session.ContainerID)
 		}
 	}
 
@@ -165,7 +177,7 @@ func sessionCleanup(srv *api.Server, idleTimeoutMinutes int) {
 				log.Printf("Session %s: idle timeout, cleaning up", session.ID)
 				if session.ContainerID != "" {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					_ = srv.Docker.StopContainer(ctx, session.ContainerID)
+					_ = srv.Container.StopContainer(ctx, session.ContainerID)
 					cancel()
 				}
 				session.Status = models.SessionDisconnected
