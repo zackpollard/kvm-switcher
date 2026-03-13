@@ -61,6 +61,12 @@ export function getKVMWebSocketURL(sessionId: string): string {
 	return `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
 }
 
+export async function fetchIPMIPorts(): Promise<Record<string, number>> {
+	const res = await fetch(`${API_BASE}/ipmi-ports`);
+	if (!res.ok) return {};
+	return res.json();
+}
+
 export interface AuthStatus {
 	authenticated: boolean;
 	oidc_enabled?: boolean;
