@@ -65,6 +65,36 @@ func validate(cfg *models.AppConfig) error {
 		return fmt.Errorf("unknown runtime %q (must be \"docker\" or \"kubernetes\")", cfg.Settings.Runtime)
 	}
 
+	if cfg.OIDC.Enabled {
+		if cfg.OIDC.IssuerURL == "" {
+			return fmt.Errorf("oidc: issuer_url is required when OIDC is enabled")
+		}
+		if cfg.OIDC.ClientID == "" {
+			return fmt.Errorf("oidc: client_id is required when OIDC is enabled")
+		}
+		if cfg.OIDC.ClientSecretEnv == "" {
+			return fmt.Errorf("oidc: client_secret_env is required when OIDC is enabled")
+		}
+		if cfg.OIDC.RedirectURL == "" {
+			return fmt.Errorf("oidc: redirect_url is required when OIDC is enabled")
+		}
+		if len(cfg.OIDC.RoleMappings) == 0 {
+			return fmt.Errorf("oidc: at least one role_mapping is required when OIDC is enabled")
+		}
+		// Validate that mapped servers exist (unless wildcard)
+		serverNames := make(map[string]bool)
+		for _, s := range cfg.Servers {
+			serverNames[s.Name] = true
+		}
+		for role, mapping := range cfg.OIDC.RoleMappings {
+			for _, srv := range mapping.Servers {
+				if srv != "*" && !serverNames[srv] {
+					return fmt.Errorf("oidc: role %q references unknown server %q", role, srv)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

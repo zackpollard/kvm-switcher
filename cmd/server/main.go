@@ -17,6 +17,7 @@ import (
 	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"
 	k8smgr "github.com/zackpollard/kvm-switcher/internal/kubernetes"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
 
 func main() {
@@ -59,18 +60,57 @@ func main() {
 	// Create API server
 	srv := api.NewServer(cfg, cm)
 
+	// Set up OIDC provider if enabled
+	var oidcProvider *kvmoidc.Provider
+	if cfg.OIDC.Enabled {
+		log.Println("OIDC authentication enabled")
+		oidcProvider, err = kvmoidc.NewProvider(context.Background(), &cfg.OIDC)
+		if err != nil {
+			log.Fatalf("Failed to initialize OIDC provider: %v", err)
+		}
+		log.Printf("OIDC configured with issuer: %s", cfg.OIDC.IssuerURL)
+	}
+
 	// Set up routes
 	mux := http.NewServeMux()
 
-	// API routes
-	mux.HandleFunc("GET /api/servers", srv.ListServers)
-	mux.HandleFunc("POST /api/sessions", srv.CreateSession)
-	mux.HandleFunc("GET /api/sessions", srv.ListSessions)
-	mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
-	mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+	// Auth routes (always registered, but login redirects only work when OIDC is enabled)
+	if oidcProvider != nil {
+		mux.HandleFunc("GET /auth/login", oidcProvider.HandleLogin)
+		mux.HandleFunc("GET /auth/callback", oidcProvider.HandleCallback)
+		mux.HandleFunc("GET /auth/logout", oidcProvider.HandleLogout)
+	}
+	// /auth/me is always available - returns auth status
+	if oidcProvider != nil {
+		mux.HandleFunc("GET /auth/me", oidcProvider.HandleMe)
+	} else {
+		mux.HandleFunc("GET /auth/me", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"authenticated":false,"oidc_enabled":false}`))
+		})
+	}
 
-	// WebSocket route for KVM proxy
-	mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+	// API routes - wrap with OIDC middleware if enabled
+	if oidcProvider != nil {
+		apiMux := http.NewServeMux()
+		apiMux.HandleFunc("GET /api/servers", srv.ListServers)
+		apiMux.HandleFunc("POST /api/sessions", srv.CreateSession)
+		apiMux.HandleFunc("GET /api/sessions", srv.ListSessions)
+		apiMux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
+		apiMux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+		apiMux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+
+		protected := oidcProvider.Middleware(apiMux)
+		mux.Handle("/api/", protected)
+		mux.Handle("/ws/", protected)
+	} else {
+		mux.HandleFunc("GET /api/servers", srv.ListServers)
+		mux.HandleFunc("POST /api/sessions", srv.CreateSession)
+		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
+		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
+		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+	}
 
 	// Serve frontend static files
 	if _, err := os.Stat(*webDir); err == nil {

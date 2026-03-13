@@ -28,10 +28,44 @@ type Settings struct {
 	KubeConfig            string `yaml:"kube_config"`     // path to kubeconfig; empty = in-cluster
 }
 
+// OIDCConfig holds optional OIDC authentication settings.
+type OIDCConfig struct {
+	Enabled         bool                    `yaml:"enabled"`
+	IssuerURL       string                  `yaml:"issuer_url"`
+	ClientID        string                  `yaml:"client_id"`
+	ClientSecretEnv string                  `yaml:"client_secret_env"`
+	RedirectURL     string                  `yaml:"redirect_url"`
+	Scopes          []string                `yaml:"scopes"`
+	RoleClaim       string                  `yaml:"role_claim"`
+	RoleMappings    map[string]*RoleMapping `yaml:"role_mappings"`
+}
+
+// RoleMapping defines which servers a role has access to.
+type RoleMapping struct {
+	Servers []string `yaml:"servers"`
+}
+
 // AppConfig is the top-level configuration structure.
 type AppConfig struct {
 	Servers  []ServerConfig `yaml:"servers"`
 	Settings Settings       `yaml:"settings"`
+	OIDC     OIDCConfig     `yaml:"oidc"`
+}
+
+// UserInfo represents an authenticated user.
+type UserInfo struct {
+	Email string   `json:"email"`
+	Name  string   `json:"name"`
+	Roles []string `json:"roles"`
+}
+
+// UserSession stores server-side auth session data.
+type UserSession struct {
+	ID           string
+	User         *UserInfo
+	IDToken      string
+	RefreshToken string
+	ExpiresAt    time.Time
 }
 
 // SessionStatus represents the lifecycle state of a KVM session.

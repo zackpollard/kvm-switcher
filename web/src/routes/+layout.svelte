@@ -1,6 +1,13 @@
 <script lang="ts">
 	import '../app.css';
+	import { fetchAuthStatus, type AuthStatus } from '$lib/api';
+
 	let { children } = $props();
+	let auth: AuthStatus | null = $state(null);
+
+	$effect(() => {
+		fetchAuthStatus().then((s) => (auth = s)).catch(() => (auth = null));
+	});
 </script>
 
 <div class="min-h-screen bg-gray-950 text-gray-100">
@@ -13,6 +20,20 @@
 					</svg>
 					KVM Switcher
 				</a>
+
+				{#if auth?.authenticated}
+					<div class="flex items-center gap-3">
+						<span class="text-sm text-gray-400">
+							{auth.name || auth.email}
+						</span>
+						<a
+							href="/auth/logout"
+							class="rounded-md bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+						>
+							Logout
+						</a>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</nav>
