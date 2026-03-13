@@ -23,10 +23,11 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	Config    *models.AppConfig
-	Sessions  *models.SessionStore
-	Container containermgr.Manager
-	BMCCreds  map[string]*models.BMCCredentials // session ID -> BMC creds for logout
+	Config      *models.AppConfig
+	Sessions    *models.SessionStore
+	Container   containermgr.Manager
+	BMCCreds    map[string]*models.BMCCredentials // session ID -> BMC creds for logout
+	IPMIProxies *IPMIProxyManager
 }
 
 // NewServer creates a new API server.
@@ -306,6 +307,28 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+// IPMIPorts handles GET /api/ipmi-ports - returns proxy port for each server.
+func (s *Server) IPMIPorts(w http.ResponseWriter, r *http.Request) {
+	if s.IPMIProxies == nil {
+		writeJSON(w, http.StatusOK, map[string]int{})
+		return
+	}
+
+	user := kvmoidc.UserFromContext(r.Context())
+	oidcEnabled := s.Config.OIDC.Enabled
+
+	ports := make(map[string]int)
+	for _, srv := range s.Config.Servers {
+		if oidcEnabled && !kvmoidc.UserCanAccessServer(&s.Config.OIDC, user, srv.Name) {
+			continue
+		}
+		if port := s.IPMIProxies.GetPort(srv.Name); port != 0 {
+			ports[srv.Name] = port
+		}
+	}
+	writeJSON(w, http.StatusOK, ports)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

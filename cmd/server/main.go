@@ -60,6 +60,14 @@ func main() {
 	// Create API server
 	srv := api.NewServer(cfg, cm)
 
+	// Start IPMI proxy listeners (one per server, zero content rewriting)
+	ipmiProxies, err := api.NewIPMIProxyManager(cfg)
+	if err != nil {
+		log.Fatalf("Failed to start IPMI proxies: %v", err)
+	}
+	defer ipmiProxies.Close()
+	srv.IPMIProxies = ipmiProxies
+
 	// Set up OIDC provider if enabled
 	var oidcProvider *kvmoidc.Provider
 	if cfg.OIDC.Enabled {
@@ -98,21 +106,20 @@ func main() {
 		apiMux.HandleFunc("GET /api/sessions", srv.ListSessions)
 		apiMux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		apiMux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+		apiMux.HandleFunc("GET /api/ipmi-ports", srv.IPMIPorts)
 		apiMux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
-		apiMux.HandleFunc("/ipmi/", srv.HandleIPMIProxy)
 
 		protected := oidcProvider.Middleware(apiMux)
 		mux.Handle("/api/", protected)
 		mux.Handle("/ws/", protected)
-		mux.Handle("/ipmi/", protected)
 	} else {
 		mux.HandleFunc("GET /api/servers", srv.ListServers)
 		mux.HandleFunc("POST /api/sessions", srv.CreateSession)
 		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
 		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+		mux.HandleFunc("GET /api/ipmi-ports", srv.IPMIPorts)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
-		mux.HandleFunc("/ipmi/", srv.HandleIPMIProxy)
 	}
 
 	// Serve frontend static files

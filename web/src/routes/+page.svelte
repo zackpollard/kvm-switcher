@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { fetchServers, createSession, type ServerInfo, type KVMSession } from '$lib/api';
+	import { fetchServers, createSession, fetchIPMIPorts, type ServerInfo, type KVMSession } from '$lib/api';
 	import { goto } from '$app/navigation';
 
 	let servers: ServerInfo[] = $state([]);
+	let ipmiPorts: Record<string, number> = $state({});
 	let loading = $state(true);
 	let error = $state('');
 	let connecting = $state<string | null>(null);
@@ -18,11 +19,18 @@
 			}
 			if (!res.ok) throw new Error(`Failed to fetch servers: ${res.statusText}`);
 			servers = await res.json();
+			ipmiPorts = await fetchIPMIPorts();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load servers';
 		} finally {
 			loading = false;
 		}
+	}
+
+	function getIPMIUrl(serverName: string): string | null {
+		const port = ipmiPorts[serverName];
+		if (!port) return null;
+		return `${window.location.protocol}//${window.location.hostname}:${port}/`;
 	}
 
 	async function connect(serverName: string) {
@@ -102,14 +110,16 @@
 						{/if}
 
 						<div class="flex items-center gap-2">
-							<a
-								href="/ipmi/{server.name}/"
-								target="_blank"
-								rel="noopener noreferrer"
-								class="rounded-md bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white"
-							>
-								IPMI
-							</a>
+							{#if getIPMIUrl(server.name)}
+								<a
+									href={getIPMIUrl(server.name)}
+									target="_blank"
+									rel="noopener noreferrer"
+									class="rounded-md bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white"
+								>
+									IPMI
+								</a>
+							{/if}
 							<button
 								onclick={() => connect(server.name)}
 								disabled={connecting === server.name}
