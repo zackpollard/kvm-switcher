@@ -23,9 +23,9 @@ type Settings struct {
 	DockerImage           string `yaml:"docker_image"`
 	ContainerImage        string `yaml:"container_image"`
 	ListenAddress         string `yaml:"listen_address"`
-	Runtime               string `yaml:"runtime"`         // "docker" (default) or "kubernetes"
-	KubeNamespace         string `yaml:"kube_namespace"`  // default: "kvm-switcher"
-	KubeConfig            string `yaml:"kube_config"`     // path to kubeconfig; empty = in-cluster
+	Runtime               string `yaml:"runtime"`        // "docker" (default) or "kubernetes"
+	KubeNamespace         string `yaml:"kube_namespace"` // default: "kvm-switcher"
+	KubeConfig            string `yaml:"kube_config"`    // path to kubeconfig; empty = in-cluster
 }
 
 // OIDCConfig holds optional OIDC authentication settings.
@@ -101,24 +101,24 @@ type BMCCredentials struct {
 
 // JViewerArgs holds all arguments needed to launch JViewer.
 type JViewerArgs struct {
-	Hostname        string
-	KVMToken        string
-	KVMSecure       string
-	KVMPort         string
-	VMSecure        string
-	CDState         string
-	FDState         string
-	HDState         string
-	CDNum           string
-	FDNum           string
-	HDNum           string
-	ExtendedPriv    string
-	Localization    string
-	KeyboardLayout  string
-	WebSecurePort   string
+	Hostname          string
+	KVMToken          string
+	KVMSecure         string
+	KVMPort           string
+	VMSecure          string
+	CDState           string
+	FDState           string
+	HDState           string
+	CDNum             string
+	FDNum             string
+	HDNum             string
+	ExtendedPriv      string
+	Localization      string
+	KeyboardLayout    string
+	WebSecurePort     string
 	SinglePortEnabled string
-	WebCookie       string
-	OEMFeatures     string
+	WebCookie         string
+	OEMFeatures       string
 }
 
 // SessionStore provides thread-safe access to active sessions.

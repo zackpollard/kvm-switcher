@@ -1,0 +1,169 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+      new_tag: ${{ steps.version.outputs.new_tag }}
+      changelog: ${{ steps.version.outputs.changelog }}
+      bumped: ${{ steps.version.outputs.bumped }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate next version from conventional commits
+        id: version
+        run: |
+          # Get the latest tag, default to v0.0.0 if none exists
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $latest_tag"
+
+          # Parse current version
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          # Analyze commits since last tag
+          bump="none"
+          changelog=""
+
+          while IFS= read -r line; do
+            if [ -z "$line" ]; then continue; fi
+            subject=$(echo "$line" | sed 's/^[^ ]* //')
+
+            # Check for breaking changes
+            if echo "$subject" | grep -qiE '^[a-z]+(\(.*\))?!:'; then
+              bump="major"
+              changelog="${changelog}\n- ${subject}"
+            elif echo "$subject" | grep -qiE '^feat(\(.*\))?:'; then
+              if [ "$bump" != "major" ]; then bump="minor"; fi
+              changelog="${changelog}\n- ${subject}"
+            elif echo "$subject" | grep -qiE '^fix(\(.*\))?:'; then
+              if [ "$bump" = "none" ]; then bump="patch"; fi
+              changelog="${changelog}\n- ${subject}"
+            elif echo "$subject" | grep -qiE '^(perf|refactor)(\(.*\))?:'; then
+              if [ "$bump" = "none" ]; then bump="patch"; fi
+              changelog="${changelog}\n- ${subject}"
+            fi
+          done <<< "$(git log "${latest_tag}..HEAD" --oneline 2>/dev/null || git log --oneline)"
+
+          if [ "$bump" = "none" ]; then
+            echo "No version bump needed"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            echo "new_version=${version}" >> "$GITHUB_OUTPUT"
+            echo "new_tag=${latest_tag}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Bump version
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+
+          new_version="${major}.${minor}.${patch}"
+          new_tag="v${new_version}"
+          echo "Bump: $bump -> $new_tag"
+
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+          echo "new_tag=${new_tag}" >> "$GITHUB_OUTPUT"
+          echo "changelog<<CHANGES_EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$changelog" >> "$GITHUB_OUTPUT"
+          echo "CHANGES_EOF" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./... -count=1 -race
+
+  publish:
+    name: Publish Images
+    runs-on: ubuntu-latest
+    needs: [version, test]
+    if: needs.version.outputs.bumped == 'true'
+    strategy:
+      matrix:
+        include:
+          - image: kvm-switcher
+            context: .
+            file: Dockerfile
+          - image: jviewer
+            context: docker/jviewer
+            file: docker/jviewer/Dockerfile
+            platform: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: ${{ matrix.platform || 'linux/amd64' }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:${{ needs.version.outputs.new_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  tag:
+    name: Create Git Tag
+    runs-on: ubuntu-latest
+    needs: [version, publish]
+    if: needs.version.outputs.bumped == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create and push tag
+        run: |
+          git tag "${{ needs.version.outputs.new_tag }}"
+          git push origin "${{ needs.version.outputs.new_tag }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.new_tag }}
+          name: ${{ needs.version.outputs.new_tag }}
+          body: |
+            ## Changes
+            ${{ needs.version.outputs.changelog }}
+
+            ## Docker Images
+            ```
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/kvm-switcher:${{ needs.version.outputs.new_version }}
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/jviewer:${{ needs.version.outputs.new_version }}
+            ```
+          generate_release_notes: false

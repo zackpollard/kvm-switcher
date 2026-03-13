@@ -32,7 +32,7 @@ type sessionResponse struct {
 
 // jnlpXML represents the JNLP XML structure for parsing.
 type jnlpXML struct {
-	XMLName xml.Name        `xml:"jnlp"`
+	XMLName xml.Name            `xml:"jnlp"`
 	AppDesc jnlpApplicationDesc `xml:"application-desc"`
 }
 
