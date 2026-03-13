@@ -1,4 +1,4 @@
-.PHONY: all build build-frontend build-backend build-docker clean dev
+.PHONY: all build build-frontend build-backend build-docker clean dev test
 
 all: build
 
@@ -27,6 +27,10 @@ dev-frontend:
 
 dev-backend:
 	go run ./cmd/server/ -config configs/servers.yaml -web web/build
+
+# Run tests
+test:
+	go test ./... -count=1
 
 clean:
 	rm -f kvm-switcher
