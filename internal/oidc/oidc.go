@@ -218,13 +218,15 @@ func (p *Provider) HandleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type contextKey string
+// ContextKey is the type used for context value keys.
+type ContextKey string
 
-const userContextKey contextKey = "user"
+// UserContextKey is the context key for storing/retrieving user info.
+const UserContextKey ContextKey = "user"
 
 // UserFromContext retrieves user info from the request context.
 func UserFromContext(ctx context.Context) *models.UserInfo {
-	user, _ := ctx.Value(userContextKey).(*models.UserInfo)
+	user, _ := ctx.Value(UserContextKey).(*models.UserInfo)
 	return user
 }
 
@@ -246,7 +248,7 @@ func (p *Provider) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), userContextKey, session.User)
+		ctx := context.WithValue(r.Context(), UserContextKey, session.User)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
