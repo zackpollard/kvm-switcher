@@ -51,19 +51,21 @@ func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Session %s: proxying WebSocket to %s", sessionID, containerURL.String())
 
-	// Dial the container websockify with retries
+	// Dial the container websockify. The session startup already waits for
+	// websockify to be reachable, so this should connect quickly. A few
+	// retries are kept as a safety net for transient failures.
 	dialer := websocket.Dialer{
 		Subprotocols: []string{"binary"},
 	}
 	var backendConn *websocket.Conn
 	var err error
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 3; i++ {
 		backendConn, _, err = dialer.Dial(containerURL.String(), nil)
 		if err == nil {
 			break
 		}
 		log.Printf("Session %s: waiting for container websockify (attempt %d)...", sessionID, i+1)
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
 	}
 	if err != nil {
 		log.Printf("Session %s: failed to connect to container websockify: %v", sessionID, err)

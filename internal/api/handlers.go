@@ -3,9 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"time"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/zackpollard/kvm-switcher/internal/auth"
 	"github.com/zackpollard/kvm-switcher/internal/config"
@@ -189,6 +194,39 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	}
 
 	session.WebSocketPort = wsPort
+	s.Sessions.Set(session)
+
+	// Wait for websockify inside the container to accept WebSocket connections
+	// before reporting the session as connected. Without this, the frontend
+	// opens a WebSocket immediately but websockify isn't ready, causing the
+	// browser connection to fail and trigger an unnecessary reconnect cycle.
+	log.Printf("Session %s: waiting for container websockify on port %d...", session.ID, wsPort)
+	wsURL := url.URL{
+		Scheme: "ws",
+		Host:   net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", wsPort)),
+		Path:   "/websockify",
+	}
+	probeDialer := websocket.Dialer{Subprotocols: []string{"binary"}}
+	ready := false
+	for i := 0; i < 30; i++ {
+		probeConn, _, err := probeDialer.Dial(wsURL.String(), nil)
+		if err == nil {
+			probeConn.Close()
+			ready = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !ready {
+		log.Printf("Session %s: websockify never became reachable", session.ID)
+		session.Status = models.SessionError
+		session.Error = "KVM container started but websockify not reachable"
+		s.Sessions.Set(session)
+		_ = s.Container.StopContainer(ctx, session.ContainerID)
+		_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, creds)
+		return
+	}
+
 	session.Status = models.SessionConnected
 	session.LastActivity = time.Now()
 	s.Sessions.Set(session)

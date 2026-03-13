@@ -20,12 +20,12 @@ func newMockBMC(t *testing.T) *httptest.Server {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><head><link href="/css/style.css"></head><body><a href="/dashboard">Dashboard</a><script src="/js/app.js"></script></body></html>`)
+		fmt.Fprint(w, `<html><head><title>BMC</title></head><body><link href="/css/style.css"><a href="/dashboard">Dashboard</a><script src="/js/app.js"></script></body></html>`)
 	})
 
 	mux.HandleFunc("GET /dashboard", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<html><body><h1>BMC Dashboard</h1><a href="/">Home</a></body></html>`)
+		fmt.Fprint(w, `<html><head></head><body><h1>BMC Dashboard</h1><a href="/">Home</a></body></html>`)
 	})
 
 	mux.HandleFunc("GET /css/style.css", func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +35,7 @@ func newMockBMC(t *testing.T) *httptest.Server {
 
 	mux.HandleFunc("GET /js/app.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
-		fmt.Fprint(w, `var apiURL = "/rpc/status"; fetch("/api/data");`)
+		fmt.Fprint(w, `var apiURL = "/rpc/status"; fetch("/api/data"); var re = /test\/pattern/g;`)
 	})
 
 	mux.HandleFunc("GET /images/logo.png", func(w http.ResponseWriter, r *http.Request) {
@@ -55,7 +55,6 @@ func newMockBMC(t *testing.T) *httptest.Server {
 
 	mux.HandleFunc("GET /api/check-cookies", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		// Check that our auth cookies are NOT forwarded
 		hasKVMSession := false
 		for _, c := range r.Cookies() {
 			if c.Name == "kvm_session" {
@@ -65,13 +64,17 @@ func newMockBMC(t *testing.T) *httptest.Server {
 		fmt.Fprintf(w, `{"has_kvm_session":%v}`, hasKVMSession)
 	})
 
+	mux.HandleFunc("GET /rpc/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"status":"ok","path":"/rpc/status"}`)
+	})
+
 	return httptest.NewServer(mux)
 }
 
 // configWithBMC creates a test config pointing to the mock BMC server.
 func configWithBMC(t *testing.T, bmcAddr string, oidcEnabled bool) *models.AppConfig {
 	t.Helper()
-	// Parse host:port from the test server address
 	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmcAddr, "http://"), ":")
 	port := 80
 	if portStr != "" {
@@ -116,7 +119,7 @@ func TestIPMIProxy_HTMLRewriting(t *testing.T) {
 
 	body := w.Body.String()
 
-	// Check that absolute paths have been rewritten
+	// Check that HTML attributes have been rewritten
 	if !strings.Contains(body, `href="/ipmi/test-bmc/css/style.css"`) {
 		t.Errorf("CSS link not rewritten.\nbody: %s", body)
 	}
@@ -126,25 +129,17 @@ func TestIPMIProxy_HTMLRewriting(t *testing.T) {
 	if !strings.Contains(body, `src="/ipmi/test-bmc/js/app.js"`) {
 		t.Errorf("JS src not rewritten.\nbody: %s", body)
 	}
-}
 
-func TestIPMIProxy_CSSRewriting(t *testing.T) {
-	bmc := newMockBMC(t)
-	defer bmc.Close()
-
-	srv := NewServer(configWithBMC(t, bmc.URL, false), &mockContainerManager{})
-
-	req := httptest.NewRequest("GET", "/ipmi/test-bmc/css/style.css", nil)
-	w := httptest.NewRecorder()
-	srv.HandleIPMIProxy(w, req)
-
-	body := w.Body.String()
-	if !strings.Contains(body, `url("/ipmi/test-bmc/images/bg.png")`) {
-		t.Errorf("CSS url() not rewritten.\nbody: %s", body)
+	// Check that the URL rewriting script is injected
+	if !strings.Contains(body, `<script>(function(){`) {
+		t.Errorf("URL rewriting script not injected.\nbody: %s", body)
+	}
+	if !strings.Contains(body, `/ipmi/test-bmc`) {
+		t.Errorf("proxy prefix not found in injected script.\nbody: %s", body)
 	}
 }
 
-func TestIPMIProxy_JSRewriting(t *testing.T) {
+func TestIPMIProxy_JSNotRewritten(t *testing.T) {
 	bmc := newMockBMC(t)
 	defer bmc.Close()
 
@@ -155,11 +150,36 @@ func TestIPMIProxy_JSRewriting(t *testing.T) {
 	srv.HandleIPMIProxy(w, req)
 
 	body := w.Body.String()
-	if !strings.Contains(body, `"/ipmi/test-bmc/rpc/status"`) {
-		t.Errorf("JS string literal not rewritten.\nbody: %s", body)
+
+	// JavaScript content should NOT be rewritten (handled by injected client-side script)
+	if strings.Contains(body, "ipmi/test-bmc") {
+		t.Errorf("JS content should not be rewritten by the proxy.\nbody: %s", body)
 	}
-	if !strings.Contains(body, `"/ipmi/test-bmc/api/data"`) {
-		t.Errorf("JS fetch URL not rewritten.\nbody: %s", body)
+
+	// Regex literals should be preserved
+	if !strings.Contains(body, `/test\/pattern/g`) {
+		t.Errorf("JS regex literal was corrupted.\nbody: %s", body)
+	}
+}
+
+func TestIPMIProxy_JSONNotRewritten(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+
+	srv := NewServer(configWithBMC(t, bmc.URL, false), &mockContainerManager{})
+
+	req := httptest.NewRequest("GET", "/ipmi/test-bmc/rpc/status", nil)
+	w := httptest.NewRecorder()
+	srv.HandleIPMIProxy(w, req)
+
+	body := w.Body.String()
+
+	// JSON responses should not be rewritten
+	if strings.Contains(body, "ipmi/test-bmc") {
+		t.Errorf("JSON content should not be rewritten.\nbody: %s", body)
+	}
+	if !strings.Contains(body, `"/rpc/status"`) {
+		t.Errorf("JSON path was corrupted.\nbody: %s", body)
 	}
 }
 
@@ -178,7 +198,6 @@ func TestIPMIProxy_BinaryPassthrough(t *testing.T) {
 	}
 
 	body := w.Body.Bytes()
-	// PNG magic bytes should pass through unmodified
 	if len(body) < 4 || body[0] != 0x89 || body[1] != 0x50 {
 		t.Errorf("binary content was corrupted")
 	}
@@ -275,7 +294,6 @@ func TestIPMIProxy_OIDCForbidden(t *testing.T) {
 
 	srv := NewServer(configWithBMC(t, bmc.URL, true), &mockContainerManager{})
 
-	// User with "ops" role can access "test-bmc" but not "other-bmc"
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
 
@@ -321,7 +339,7 @@ func TestRewriteURL(t *testing.T) {
 		{"http://10.0.0.1:80", "/ipmi/srv1"},
 		{"http://10.0.0.1/page", "/ipmi/srv1/page"},
 		{"http://10.0.0.1", "/ipmi/srv1"},
-		{"/ipmi/srv1/already", "/ipmi/srv1/already"}, // no double rewrite
+		{"/ipmi/srv1/already", "/ipmi/srv1/already"},
 		{"https://external.com/page", "https://external.com/page"},
 	}
 
@@ -361,7 +379,60 @@ func TestIsTextContent(t *testing.T) {
 	}
 }
 
-func TestRewriteAbsolutePaths(t *testing.T) {
+func TestRewriteRefreshHeader(t *testing.T) {
+	prefix := "/ipmi/srv1"
+	origin := "http://10.0.0.1:80"
+	originNoPort := "http://10.0.0.1"
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"0;url=/page", "0;url=/ipmi/srv1/page"},
+		{"5;url=/", "5;url=/ipmi/srv1/"},
+		{"0;url=http://10.0.0.1/page", "0;url=/ipmi/srv1/page"},
+		{"10", "10"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := rewriteRefreshHeader(tt.input, prefix, origin, originNoPort)
+			if got != tt.want {
+				t.Errorf("rewriteRefreshHeader(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInjectScript(t *testing.T) {
+	script := []byte(`<script>alert(1)</script>`)
+
+	t.Run("with head tag", func(t *testing.T) {
+		body := []byte(`<html><head><title>Test</title></head><body></body></html>`)
+		result := string(injectScript(body, script))
+		if !strings.Contains(result, `<head><script>alert(1)</script><title>`) {
+			t.Errorf("script not injected after <head>.\nresult: %s", result)
+		}
+	})
+
+	t.Run("with head attributes", func(t *testing.T) {
+		body := []byte(`<html><HEAD lang="en"><title>Test</title></HEAD></html>`)
+		result := string(injectScript(body, script))
+		if !strings.Contains(result, `<HEAD lang="en"><script>alert(1)</script><title>`) {
+			t.Errorf("script not injected after <HEAD>.\nresult: %s", result)
+		}
+	})
+
+	t.Run("no head tag", func(t *testing.T) {
+		body := []byte(`<html><body>hello</body></html>`)
+		result := string(injectScript(body, script))
+		if !strings.HasPrefix(result, `<script>alert(1)</script><html>`) {
+			t.Errorf("script not prepended.\nresult: %s", result)
+		}
+	})
+}
+
+func TestHTMLAttrRewriting(t *testing.T) {
 	prefix := []byte("/ipmi/srv1")
 
 	tests := []struct {
@@ -369,21 +440,19 @@ func TestRewriteAbsolutePaths(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"double-quoted href", `href="/page"`, `href="/ipmi/srv1/page"`},
-		{"single-quoted src", `src='/js/app.js'`, `src='/ipmi/srv1/js/app.js'`},
-		{"css url paren", `url(/images/bg.png)`, `url(/ipmi/srv1/images/bg.png)`},
-		{"css url quoted", `url("/images/bg.png")`, `url("/ipmi/srv1/images/bg.png")`},
-		{"js string", `var x = "/api/call"`, `var x = "/ipmi/srv1/api/call"`},
+		{"href double-quoted", `href="/page"`, `href="/ipmi/srv1/page"`},
+		{"src single-quoted", `src='/js/app.js'`, `src='/ipmi/srv1/js/app.js'`},
+		{"action attr", `action="/submit"`, `action="/ipmi/srv1/submit"`},
+		{"formaction attr", `formaction="/go"`, `formaction="/ipmi/srv1/go"`},
 		{"protocol-relative", `src="//cdn.example.com/js"`, `src="//cdn.example.com/js"`},
 		{"already rewritten", `href="/ipmi/srv1/page"`, `href="/ipmi/srv1/page"`},
-		{"equals no quotes", `action=/login`, `action=/ipmi/srv1/login`},
-		{"multiple paths", `href="/a" src="/b"`, `href="/ipmi/srv1/a" src="/ipmi/srv1/b"`},
-		{"no paths to rewrite", `<p>hello</p>`, `<p>hello</p>`},
+		{"relative path", `href="page.html"`, `href="page.html"`},
+		{"non-url attr", `data-value="/something"`, `data-value="/something"`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(rewriteAbsolutePaths([]byte(tt.input), prefix))
+			got := string(rewriteWithRegex([]byte(tt.input), htmlAttrRe, prefix))
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
