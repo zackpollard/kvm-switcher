@@ -18,10 +18,19 @@ import (
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
 
-// pathRewriteRe matches a delimiter (quote, paren, or equals) followed by a forward slash
-// and captures both the delimiter and the character after the slash. We use a replacement
-// function to skip protocol-relative URLs (//) and already-rewritten paths (/ipmi/).
-var pathRewriteRe = regexp.MustCompile(`(["'(=])\s*/([^/])`)
+// htmlAttrRe matches href, src, action, and formaction HTML attributes with absolute paths.
+// It captures the attribute name and delimiter to rewrite only well-known URL attributes.
+var htmlAttrRe = regexp.MustCompile(`(?i)((?:href|src|action|formaction)\s*=\s*["'])\s*/([^/])`)
+
+// cssURLRe matches CSS url() values with absolute paths.
+var cssURLRe = regexp.MustCompile(`(?i)(url\(\s*["']?)\s*/([^/])`)
+
+// jsStringLiteralRe matches JavaScript quoted string literals containing absolute paths.
+// This handles inline <script> blocks in HTML where variables like var x = "/page/" appear,
+// as well as document.write() calls that create elements with absolute src paths.
+// It only matches double-quoted and single-quoted strings (not regex literals like /pattern/).
+var jsStringLiteralRe = regexp.MustCompile(`(["'])/([^/"'])`)
+
 
 // ipmiProxyTransport is shared across all IPMI proxy requests.
 // It skips TLS verification since BMCs commonly use self-signed certificates.
@@ -89,6 +98,11 @@ func (s *Server) HandleIPMIProxy(w http.ResponseWriter, r *http.Request) {
 				req.Header.Set("Referer", rewriteReferer(ref, proxyPrefix, bmcOrigin))
 			}
 
+			// Rewrite Origin header for POST/PUT requests
+			if origin := req.Header.Get("Origin"); origin != "" {
+				req.Header.Set("Origin", bmcOrigin)
+			}
+
 			// Remove Accept-Encoding to simplify body rewriting (avoid gzip from BMC)
 			req.Header.Del("Accept-Encoding")
 		},
@@ -98,6 +112,11 @@ func (s *Server) HandleIPMIProxy(w http.ResponseWriter, r *http.Request) {
 				resp.Header.Set("Location", rewriteURL(loc, proxyPrefix, bmcOrigin, bmcOriginNoPort))
 			}
 
+			// Rewrite Refresh header if present
+			if refresh := resp.Header.Get("Refresh"); refresh != "" {
+				resp.Header.Set("Refresh", rewriteRefreshHeader(refresh, proxyPrefix, bmcOrigin, bmcOriginNoPort))
+			}
+
 			// Rewrite Set-Cookie paths
 			rewriteSetCookiePaths(resp, proxyPrefix)
 
@@ -105,9 +124,10 @@ func (s *Server) HandleIPMIProxy(w http.ResponseWriter, r *http.Request) {
 			resp.Header.Del("Content-Security-Policy")
 			resp.Header.Del("X-Frame-Options")
 
-			// Rewrite body for text content types
-			if isTextContent(resp.Header.Get("Content-Type")) {
-				return rewriteResponseBody(resp, proxyPrefix, bmcOrigin, bmcOriginNoPort)
+			// Only rewrite HTML body content
+			ct := strings.ToLower(resp.Header.Get("Content-Type"))
+			if strings.Contains(ct, "text/html") {
+				return rewriteHTMLBody(resp, proxyPrefix, bmcOrigin, bmcOriginNoPort)
 			}
 
 			return nil
@@ -159,6 +179,21 @@ func rewriteURL(loc, proxyPrefix, bmcOrigin, bmcOriginNoPort string) string {
 	return loc
 }
 
+// rewriteRefreshHeader rewrites URLs in HTTP Refresh headers (e.g. "0;url=/page").
+func rewriteRefreshHeader(refresh, proxyPrefix, bmcOrigin, bmcOriginNoPort string) string {
+	parts := strings.SplitN(refresh, ";", 2)
+	if len(parts) < 2 {
+		return refresh
+	}
+	urlPart := strings.TrimSpace(parts[1])
+	if strings.HasPrefix(strings.ToLower(urlPart), "url=") {
+		rawURL := strings.TrimSpace(urlPart[4:])
+		rewritten := rewriteURL(rawURL, proxyPrefix, bmcOrigin, bmcOriginNoPort)
+		return parts[0] + ";url=" + rewritten
+	}
+	return refresh
+}
+
 // rewriteReferer converts the Referer header back to the BMC origin.
 func rewriteReferer(ref, proxyPrefix, bmcOrigin string) string {
 	u, err := url.Parse(ref)
@@ -208,9 +243,49 @@ func isTextContent(ct string) bool {
 		strings.Contains(ct, "application/xml")
 }
 
-// rewriteResponseBody reads the response body, rewrites absolute paths to go through
-// the proxy prefix, and replaces the body with the rewritten content.
-func rewriteResponseBody(resp *http.Response, proxyPrefix, bmcOrigin, bmcOriginNoPort string) error {
+// urlRewriteScript returns a <script> tag that intercepts XHR, fetch, link clicks,
+// and form submissions to rewrite absolute paths through the proxy prefix. This
+// handles JavaScript-initiated requests without needing to rewrite JS source code.
+func urlRewriteScript(proxyPrefix string) []byte {
+	return []byte(`<script>(function(){` +
+		`var P='` + proxyPrefix + `';` +
+		`function rw(u){` +
+		`if(typeof u!=='string')return u;` +
+		`if(u.charAt(0)==='/'&&u.charAt(1)!=='/'&&u.indexOf(P)!==0)return P+u;` +
+		`return u}` +
+
+		// Intercept XMLHttpRequest.open
+		`var XO=XMLHttpRequest.prototype.open;` +
+		`XMLHttpRequest.prototype.open=function(m,u){` +
+		`arguments[1]=rw(u);return XO.apply(this,arguments)};` +
+
+		// Intercept fetch
+		`if(window.fetch){var FF=window.fetch;` +
+		`window.fetch=function(u,o){return FF.call(this,rw(u),o)}}` +
+
+		// Intercept link clicks
+		`document.addEventListener('click',function(e){` +
+		`var a=e.target;while(a&&a.tagName!=='A')a=a.parentElement;` +
+		`if(a&&a.href){var h=a.getAttribute('href');` +
+		`if(h&&h.charAt(0)==='/'&&h.charAt(1)!=='/'&&h.indexOf(P)!==0)` +
+		`a.setAttribute('href',P+h)}},true);` +
+
+		// Intercept form submissions
+		`document.addEventListener('submit',function(e){` +
+		`var f=e.target;if(f&&f.action){` +
+		`try{var u=new URL(f.action);` +
+		`if(u.pathname.charAt(0)==='/'&&u.pathname.indexOf(P)!==0)` +
+		`f.action=u.pathname=P+u.pathname}catch(x){}}},true);` +
+
+		// Intercept window.location and top.location assignments via a timer
+		// that checks and rewrites the current page if navigated outside the proxy
+		// (This is a fallback; most navigations are caught by the other interceptors)
+
+		`})()</script>`)
+}
+
+// readResponseBody reads and decompresses the response body.
+func readResponseBody(resp *http.Response) ([]byte, error) {
 	var body []byte
 	var err error
 
@@ -219,7 +294,7 @@ func rewriteResponseBody(resp *http.Response, proxyPrefix, bmcOrigin, bmcOriginN
 	case "gzip":
 		reader, gerr := gzip.NewReader(resp.Body)
 		if gerr != nil {
-			return gerr
+			return nil, gerr
 		}
 		body, err = io.ReadAll(reader)
 		reader.Close()
@@ -227,43 +302,75 @@ func rewriteResponseBody(resp *http.Response, proxyPrefix, bmcOrigin, bmcOriginN
 		body, err = io.ReadAll(resp.Body)
 	}
 	resp.Body.Close()
+	return body, err
+}
+
+// setResponseBody replaces the response body and updates headers.
+func setResponseBody(resp *http.Response, body []byte) {
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = int64(len(body))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+}
+
+// rewriteHTMLBody rewrites HTML responses:
+// 1. Replaces full BMC origin URLs with the proxy prefix
+// 2. Rewrites href/src/action/formaction attributes with absolute paths
+// 3. Rewrites CSS url() values with absolute paths
+// 4. Injects a client-side script to intercept XHR, fetch, and navigation
+func rewriteHTMLBody(resp *http.Response, proxyPrefix, bmcOrigin, bmcOriginNoPort string) error {
+	body, err := readResponseBody(resp)
 	if err != nil {
 		return err
 	}
 
 	prefixBytes := []byte(proxyPrefix)
 
-	// Replace full BMC URLs first (with port, then without)
-	body = bytes.ReplaceAll(body, []byte(bmcOrigin+"/"), append(prefixBytes, '/'))
-	body = bytes.ReplaceAll(body, []byte(bmcOrigin), prefixBytes)
-	if bmcOrigin != bmcOriginNoPort {
-		body = bytes.ReplaceAll(body, []byte(bmcOriginNoPort+"/"), append(prefixBytes, '/'))
-		body = bytes.ReplaceAll(body, []byte(bmcOriginNoPort), prefixBytes)
-	}
+	// Replace full BMC origin URLs (exact string match, safe for any content)
+	body = replaceBMCOrigins(body, prefixBytes, bmcOrigin, bmcOriginNoPort)
 
-	// Rewrite absolute paths in attribute values, JS strings, and CSS url()
-	body = rewriteAbsolutePaths(body, prefixBytes)
+	// Rewrite HTML attributes: href="/...", src="/...", action="/...", formaction="/..."
+	body = rewriteWithRegex(body, htmlAttrRe, prefixBytes)
 
-	// Clear encoding headers and set new content length
-	resp.Header.Del("Content-Encoding")
-	resp.Header.Del("Content-Length")
-	resp.ContentLength = int64(len(body))
-	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
-	resp.Body = io.NopCloser(bytes.NewReader(body))
+	// Rewrite CSS url() values in inline styles
+	body = rewriteWithRegex(body, cssURLRe, prefixBytes)
 
+	// Rewrite JS string literals with absolute paths in inline <script> blocks.
+	// This catches patterns like var gPageDir = "/page/"; and
+	// document.write('<script src="/str/...">') that would otherwise bypass the proxy.
+	body = rewriteWithRegex(body, jsStringLiteralRe, prefixBytes)
+
+	// Inject URL rewriting script into <head> (or at start of body)
+	script := urlRewriteScript(proxyPrefix)
+	body = injectScript(body, script)
+
+	setResponseBody(resp, body)
 	return nil
 }
 
-// rewriteAbsolutePaths finds delimiter+/+char patterns and inserts the proxy prefix,
-// skipping already-rewritten paths that start with /ipmi/.
-func rewriteAbsolutePaths(body, prefix []byte) []byte {
+// replaceBMCOrigins replaces full BMC origin URLs with the proxy prefix.
+func replaceBMCOrigins(body, prefix []byte, bmcOrigin, bmcOriginNoPort string) []byte {
+	body = bytes.ReplaceAll(body, []byte(bmcOrigin+"/"), append(append([]byte{}, prefix...), '/'))
+	body = bytes.ReplaceAll(body, []byte(bmcOrigin), append([]byte{}, prefix...))
+	if bmcOrigin != bmcOriginNoPort {
+		body = bytes.ReplaceAll(body, []byte(bmcOriginNoPort+"/"), append(append([]byte{}, prefix...), '/'))
+		body = bytes.ReplaceAll(body, []byte(bmcOriginNoPort), append([]byte{}, prefix...))
+	}
+	return body
+}
+
+// rewriteWithRegex applies a regex that matches a prefix group + "/" + next char,
+// inserting the proxy prefix after the matched prefix group's slash.
+// The regex must have two capture groups: (1) the prefix, (2) the char after "/".
+func rewriteWithRegex(body []byte, re *regexp.Regexp, prefix []byte) []byte {
 	ipmiSlash := make([]byte, len(prefix)+1)
 	copy(ipmiSlash, prefix)
 	ipmiSlash[len(prefix)] = '/'
 
 	ipmiTag := []byte("ipmi/")
 
-	indices := pathRewriteRe.FindAllIndex(body, -1)
+	indices := re.FindAllSubmatchIndex(body, -1)
 	if len(indices) == 0 {
 		return body
 	}
@@ -273,24 +380,45 @@ func rewriteAbsolutePaths(body, prefix []byte) []byte {
 
 	lastEnd := 0
 	for _, idx := range indices {
-		start, end := idx[0], idx[1]
+		_, fullEnd := idx[0], idx[1]
+		// Group 1 end is where the "/" starts
+		group1End := idx[3]
+		// Group 2 start is the char after "/"
+		group2Start, group2End := idx[4], idx[5]
 
-		// Find the slash position within the match
-		slashPos := start + bytes.IndexByte(body[start:end], '/')
-		charAfterSlash := slashPos + 1
-
-		// Skip if the content after / starts with "ipmi/" (already rewritten)
-		if bytes.HasPrefix(body[charAfterSlash:], ipmiTag) {
+		// Skip if already rewritten
+		if bytes.HasPrefix(body[group2Start:], ipmiTag) {
 			continue
 		}
 
-		// Write everything before the slash, then the proxy prefix, then continue
-		result.Write(body[lastEnd:slashPos])
+		result.Write(body[lastEnd:group1End])
 		result.Write(ipmiSlash)
-		result.Write(body[charAfterSlash:end])
-		lastEnd = end
+		result.Write(body[group2Start:group2End])
+		lastEnd = fullEnd
 	}
 
 	result.Write(body[lastEnd:])
+	return result.Bytes()
+}
+
+// injectScript inserts the script tag after <head> or at the start of the body.
+func injectScript(body, script []byte) []byte {
+	// Try to inject after <head> or <head ...>
+	headRe := regexp.MustCompile(`(?i)<head[^>]*>`)
+	loc := headRe.FindIndex(body)
+	if loc != nil {
+		var result bytes.Buffer
+		result.Grow(len(body) + len(script))
+		result.Write(body[:loc[1]])
+		result.Write(script)
+		result.Write(body[loc[1]:])
+		return result.Bytes()
+	}
+
+	// Fallback: inject at the very beginning
+	var result bytes.Buffer
+	result.Grow(len(body) + len(script))
+	result.Write(script)
+	result.Write(body)
 	return result.Bytes()
 }
