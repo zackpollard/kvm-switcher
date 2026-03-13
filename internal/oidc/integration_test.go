@@ -49,10 +49,10 @@ func newMockOIDCServer(t *testing.T) *mockOIDCServer {
 
 func (m *mockOIDCServer) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	doc := map[string]interface{}{
-		"issuer":                 m.server.URL,
-		"authorization_endpoint": m.server.URL + "/authorize",
-		"token_endpoint":         m.server.URL + "/token",
-		"jwks_uri":               m.server.URL + "/jwks",
+		"issuer":                                m.server.URL,
+		"authorization_endpoint":                m.server.URL + "/authorize",
+		"token_endpoint":                        m.server.URL + "/token",
+		"jwks_uri":                              m.server.URL + "/jwks",
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"subject_types_supported":               []string{"public"},
 		"response_types_supported":              []string{"code"},
@@ -317,10 +317,10 @@ func TestIntegration_RoleMappingFiltering(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		roles          []string
-		canAccess      []string
-		cannotAccess   []string
+		name         string
+		roles        []string
+		canAccess    []string
+		cannotAccess []string
 	}{
 		{
 			name:         "admin accesses everything",

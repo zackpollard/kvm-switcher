@@ -26,7 +26,7 @@ func (m *mockContainerManager) GetContainerLogs(_ context.Context, _ string) (st
 	return "", nil
 }
 func (m *mockContainerManager) CleanupOrphans(_ context.Context) error { return nil }
-func (m *mockContainerManager) Close() error                          { return nil }
+func (m *mockContainerManager) Close() error                           { return nil }
 
 func newTestConfig(oidcEnabled bool) *models.AppConfig {
 	cfg := &models.AppConfig{

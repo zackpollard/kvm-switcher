@@ -22,11 +22,11 @@ const (
 
 // Provider manages OIDC authentication.
 type Provider struct {
-	config     *models.OIDCConfig
-	oauth2Cfg  *oauth2.Config
-	verifier   *gooidc.IDTokenVerifier
-	sessions   map[string]*models.UserSession
-	mu         sync.RWMutex
+	config    *models.OIDCConfig
+	oauth2Cfg *oauth2.Config
+	verifier  *gooidc.IDTokenVerifier
+	sessions  map[string]*models.UserSession
+	mu        sync.RWMutex
 }
 
 // NewProvider creates and initializes an OIDC provider.
@@ -54,10 +54,10 @@ func NewProvider(ctx context.Context, cfg *models.OIDCConfig) (*Provider, error)
 	verifier := provider.Verifier(&gooidc.Config{ClientID: cfg.ClientID})
 
 	return &Provider{
-		config:   cfg,
+		config:    cfg,
 		oauth2Cfg: oauth2Cfg,
-		verifier: verifier,
-		sessions: make(map[string]*models.UserSession),
+		verifier:  verifier,
+		sessions:  make(map[string]*models.UserSession),
 	}, nil
 }
 
