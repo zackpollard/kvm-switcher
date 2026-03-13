@@ -58,6 +58,13 @@ func validate(cfg *models.AppConfig) error {
 		}
 	}
 
+	switch cfg.Settings.Runtime {
+	case "", "docker", "kubernetes":
+		// valid
+	default:
+		return fmt.Errorf("unknown runtime %q (must be \"docker\" or \"kubernetes\")", cfg.Settings.Runtime)
+	}
+
 	return nil
 }
 
@@ -73,6 +80,15 @@ func setDefaults(cfg *models.AppConfig) {
 	}
 	if cfg.Settings.DockerImage == "" {
 		cfg.Settings.DockerImage = "kvm-switcher/jviewer:latest"
+	}
+	if cfg.Settings.ContainerImage == "" {
+		cfg.Settings.ContainerImage = cfg.Settings.DockerImage
+	}
+	if cfg.Settings.Runtime == "" {
+		cfg.Settings.Runtime = "docker"
+	}
+	if cfg.Settings.KubeNamespace == "" {
+		cfg.Settings.KubeNamespace = "kvm-switcher"
 	}
 	if cfg.Settings.ListenAddress == "" {
 		cfg.Settings.ListenAddress = "0.0.0.0:8080"

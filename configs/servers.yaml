@@ -6,12 +6,12 @@ servers:
     username: "admin"
     credential_env: "BMC_PASSWORD_BROCK"
 
-  - name: "node-2"
+  - name: "surge"
     bmc_ip: "10.10.11.14"
     bmc_port: 80
     board_type: "ami_megarac"
     username: "admin"
-    credential_env: "BMC_PASSWORD_NODE2"
+    credential_env: "BMC_PASSWORD_SURGE"
 
 settings:
   max_concurrent_sessions: 4

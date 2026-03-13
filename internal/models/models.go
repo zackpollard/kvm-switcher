@@ -21,7 +21,11 @@ type Settings struct {
 	SessionTimeoutMinutes int    `yaml:"session_timeout_minutes"`
 	IdleTimeoutMinutes    int    `yaml:"idle_timeout_minutes"`
 	DockerImage           string `yaml:"docker_image"`
+	ContainerImage        string `yaml:"container_image"`
 	ListenAddress         string `yaml:"listen_address"`
+	Runtime               string `yaml:"runtime"`         // "docker" (default) or "kubernetes"
+	KubeNamespace         string `yaml:"kube_namespace"`  // default: "kvm-switcher"
+	KubeConfig            string `yaml:"kube_config"`     // path to kubeconfig; empty = in-cluster
 }
 
 // AppConfig is the top-level configuration structure.
