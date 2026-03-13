@@ -99,10 +99,12 @@ func main() {
 		apiMux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		apiMux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
 		apiMux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+		apiMux.HandleFunc("/ipmi/", srv.HandleIPMIProxy)
 
 		protected := oidcProvider.Middleware(apiMux)
 		mux.Handle("/api/", protected)
 		mux.Handle("/ws/", protected)
+		mux.Handle("/ipmi/", protected)
 	} else {
 		mux.HandleFunc("GET /api/servers", srv.ListServers)
 		mux.HandleFunc("POST /api/sessions", srv.CreateSession)
@@ -110,6 +112,7 @@ func main() {
 		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+		mux.HandleFunc("/ipmi/", srv.HandleIPMIProxy)
 	}
 
 	// Serve frontend static files
