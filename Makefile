@@ -32,6 +32,10 @@ dev-backend:
 test:
 	go test ./... -count=1
 
+# Run E2E browser tests (requires server running with BMC access)
+test-e2e:
+	cd tests/e2e && npm install && npx playwright test
+
 clean:
 	rm -f kvm-switcher
 	rm -rf web/build web/.svelte-kit

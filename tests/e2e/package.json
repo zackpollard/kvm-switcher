@@ -1,0 +1,13 @@
+{
+  "name": "kvm-switcher-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:idrac8": "npx playwright test ipmi-idrac8",
+    "test:idrac9": "npx playwright test ipmi-idrac9"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}
