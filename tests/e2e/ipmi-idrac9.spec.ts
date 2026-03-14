@@ -15,57 +15,48 @@ import { registerServiceWorker, createIPMISession, navigateToIPMI } from './help
 const SERVER = 'misty';
 
 test.describe('iDRAC9 IPMI', () => {
-  test('login page loads with Angular form', async ({ context }) => {
-    const page = await context.newPage();
-    await registerServiceWorker(page);
-    await createIPMISession(page, SERVER);
-
-    const ipmiPage = await navigateToIPMI(context, SERVER, 10000);
-
-    const state = await ipmiPage.evaluate(() => ({
-      title: document.title,
-      hasUsernameInput: !!document.querySelector('input[name="username"]'),
-      hasPasswordInput: !!document.querySelector('input[name="password"]'),
-      hasSubmitButton: !!document.querySelector('button[type="submit"]'),
-      bodyText: document.body.innerText?.substring(0, 200),
-    }));
-
-    expect(state.title).toContain('iDRAC9');
-    expect(state.hasUsernameInput).toBe(true);
-    expect(state.hasPasswordInput).toBe(true);
-    expect(state.hasSubmitButton).toBe(true);
-    expect(state.bodyText).toContain('Log In');
-  });
-
-  test('auto-login reaches dashboard', async ({ context }) => {
+  test('auto-login reaches dashboard without user interaction', async ({ context }) => {
     const page = await context.newPage();
     await registerServiceWorker(page);
     const session = await createIPMISession(page, SERVER);
     expect(session.board_type).toBe('dell_idrac9');
     expect(session.session_cookie).toBeTruthy();
 
-    const ipmiPage = await navigateToIPMI(context, SERVER, 8000);
+    // Navigate and wait — auto-login should happen automatically
+    const ipmiPage = await navigateToIPMI(context, SERVER, 30000);
 
-    // Fill Angular form — use keyboard since password field is readonly initially
-    await ipmiPage.click('input[name="username"]');
-    await ipmiPage.keyboard.type('root');
-    await ipmiPage.press('input[name="username"]', 'Tab');
-    await ipmiPage.waitForTimeout(500);
-    await ipmiPage.keyboard.type('calvin');
-    await ipmiPage.click('button[type="submit"]');
-
-    // Wait for Angular to process login and load dashboard
-    await ipmiPage.waitForTimeout(15000);
-
-    const afterLogin = await ipmiPage.evaluate(() => ({
+    const state = await ipmiPage.evaluate(() => ({
       title: document.title,
       url: window.location.href,
       bodyText: document.body.innerText?.substring(0, 500),
     }));
 
-    expect(afterLogin.title).toContain('Dashboard');
-    expect(afterLogin.url).toContain('restgui/index.html');
-    expect(afterLogin.bodyText).toContain('Dashboard');
+    expect(state.title).toContain('Dashboard');
+    expect(state.url).toContain('restgui/index.html');
+    expect(state.bodyText).toContain('Dashboard');
+  });
+
+  test('login page loads with Angular form before auto-submit', async ({ context }) => {
+    const page = await context.newPage();
+    await registerServiceWorker(page);
+    await createIPMISession(page, SERVER);
+
+    // Navigate but check quickly before auto-login completes
+    const ipmiPage = await navigateToIPMI(context, SERVER, 8000);
+
+    // At this point we should either be on the login page with Angular form
+    // or already past it (auto-login was fast). Both are acceptable.
+    const state = await ipmiPage.evaluate(() => ({
+      title: document.title,
+      url: window.location.href,
+      hasUsernameInput: !!document.querySelector('input[name="username"]'),
+      hasSubmitButton: !!document.querySelector('button[type="submit"]'),
+    }));
+
+    // Either on dashboard or login page with Angular form
+    expect(
+      state.url.includes('restgui/index.html') || state.hasUsernameInput
+    ).toBe(true);
   });
 
   test('login interception returns cached session', async ({ context }) => {
@@ -96,16 +87,8 @@ test.describe('iDRAC9 IPMI', () => {
     await registerServiceWorker(page);
     await createIPMISession(page, SERVER);
 
-    const ipmiPage = await navigateToIPMI(context, SERVER, 8000);
-
-    // Login via Angular
-    await ipmiPage.click('input[name="username"]');
-    await ipmiPage.keyboard.type('root');
-    await ipmiPage.press('input[name="username"]', 'Tab');
-    await ipmiPage.waitForTimeout(500);
-    await ipmiPage.keyboard.type('calvin');
-    await ipmiPage.click('button[type="submit"]');
-    await ipmiPage.waitForTimeout(15000);
+    // Navigate and wait for auto-login to complete
+    const ipmiPage = await navigateToIPMI(context, SERVER, 30000);
 
     const dashboard = await ipmiPage.evaluate(() => ({
       title: document.title,

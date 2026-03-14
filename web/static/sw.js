@@ -225,7 +225,18 @@ async function proxyToBMC(request, name, path) {
 			headers.set(key, value);
 		}
 
-		return new Response(resp.body, {
+		// For navigation requests to login pages, inject an auto-login script
+		// if the proxy signals that cached credentials are available.
+		let body = resp.body;
+		if (request.mode === 'navigate' && resp.headers.get('x-kvm-autologin') === 'true') {
+			const ct = (resp.headers.get('content-type') || '').toLowerCase();
+			if (ct.includes('text/html')) {
+				const html = await resp.text();
+				body = injectAutoLoginScript(html, path);
+			}
+		}
+
+		return new Response(body, {
 			status: resp.status,
 			statusText: resp.statusText,
 			headers
@@ -240,4 +251,71 @@ async function proxyToBMC(request, name, path) {
 			headers: { 'Content-Type': 'text/plain' }
 		});
 	}
+}
+
+// Auto-login script for iDRAC8 login.html
+// Waits for the login form to become visible (after AJAX loads locale),
+// fills dummy credentials (intercepted by the proxy), and submits.
+const IDRAC8_AUTO_LOGIN = `<script>
+(function() {
+	var t = setInterval(function() {
+		var da = document.getElementById('dataarea');
+		if (da && da.style.visibility === 'visible') {
+			clearInterval(t);
+			var u = document.querySelector('input[name="user"]');
+			var p = document.querySelector('input[name="password"]');
+			if (u && p) {
+				u.value = 'root';
+				p.value = 'auto';
+				if (typeof frmSubmit === 'function') frmSubmit();
+			}
+		}
+	}, 200);
+	setTimeout(function() { clearInterval(t); }, 30000);
+})();
+</script>`;
+
+// Auto-login script for iDRAC9 start.html (Angular)
+// Waits for the Angular form to initialize, fills credentials, and clicks submit.
+const IDRAC9_AUTO_LOGIN = `<script>
+(function() {
+	var t = setInterval(function() {
+		var btn = document.querySelector('button[type="submit"]');
+		var uInput = document.querySelector('input[name="username"]');
+		if (btn && uInput && window.angular) {
+			var form = document.querySelector('form');
+			if (!form) return;
+			var scope = angular.element(form).scope();
+			if (scope && scope.config) {
+				clearInterval(t);
+				scope.$apply(function() {
+					scope.config.username = 'root';
+					scope.config.password = 'auto';
+				});
+				setTimeout(function() { btn.click(); }, 100);
+			}
+		}
+	}, 200);
+	setTimeout(function() { clearInterval(t); }, 30000);
+})();
+</script>`;
+
+// Inject auto-login script into login page HTML based on URL path.
+function injectAutoLoginScript(html, path) {
+	// iDRAC8: login.html
+	if (path.endsWith('/login.html') || path === '/login.html') {
+		// Only inject if this looks like an iDRAC8 login page
+		if (html.includes('frmSubmit') && html.includes('dataarea')) {
+			return html.replace('</body>', IDRAC8_AUTO_LOGIN + '</body>');
+		}
+	}
+
+	// iDRAC9: start.html (Angular login page)
+	if (path.endsWith('/start.html') || path === '/start.html') {
+		if (html.includes('angular') && html.includes('logincontroller')) {
+			return html.replace('</body>', IDRAC9_AUTO_LOGIN + '</body>');
+		}
+	}
+
+	return html;
 }
