@@ -195,16 +195,19 @@ async function proxyToBMC(request, name, path) {
 		const resp = await fetch(bmcUrl, opts);
 
 		// If the fetch followed a redirect (resp.url differs from bmcUrl),
-		// and this is a navigation request, send a redirect response to the
-		// browser so the URL bar updates. This ensures relative paths in the
-		// BMC HTML resolve correctly (e.g., iDRAC9 redirects / →
-		// /restgui/start.html, and CSS paths must be relative to that path).
+		// redirect the browser so the URL bar and relative paths are correct.
+		// Use a JS redirect page instead of Response.redirect() because
+		// Firefox has issues with SW redirect responses on navigation.
 		if (request.mode === 'navigate' && resp.url) {
 			const respUrl = new URL(resp.url);
 			const respPath = respUrl.pathname;
 			if (respPath.startsWith(bmcPrefix) && respPath !== bmcPrefix + path.split('?')[0]) {
 				const newPath = ipmiPrefix + respPath.slice(bmcPrefix.length);
-				return Response.redirect(newPath + respUrl.search, 302);
+				const redirectUrl = newPath + respUrl.search;
+				return new Response(
+					'<html><head><script>location.replace(' + JSON.stringify(redirectUrl) + ');</script></head></html>',
+					{ status: 200, headers: { 'Content-Type': 'text/html' } }
+				);
 			}
 		}
 
@@ -215,10 +218,9 @@ async function proxyToBMC(request, name, path) {
 		for (const [key, value] of resp.headers) {
 			const lower = key.toLowerCase();
 			// Set-Cookie: browsers block this in SW responses.
-			// Content-Encoding: fetch() already decompressed the body, so
-			//   keeping this header causes the browser to try to decompress
-			//   again, producing corrupt data or triggering a file download.
-			// Content-Length: invalid after decompression (size changed).
+			// Content-Encoding / Content-Length: the Go proxy decompresses
+			//   gzip responses, but strip these as a safety net in case any
+			//   slip through — keeping stale values causes corrupt data.
 			if (lower === 'set-cookie' || lower === 'content-encoding' || lower === 'content-length') {
 				continue;
 			}
