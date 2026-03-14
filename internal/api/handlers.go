@@ -23,11 +23,10 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	Config      *models.AppConfig
-	Sessions    *models.SessionStore
-	Container   containermgr.Manager
-	BMCCreds    map[string]*models.BMCCredentials // session ID -> BMC creds for logout
-	IPMIProxies *IPMIProxyManager
+	Config    *models.AppConfig
+	Sessions  *models.SessionStore
+	Container containermgr.Manager
+	BMCCreds  map[string]*models.BMCCredentials // session ID -> BMC creds for logout
 }
 
 // NewServer creates a new API server.
@@ -303,32 +302,74 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
+// CreateIPMISession handles POST /api/ipmi-session/{name}.
+// Pre-authenticates with the BMC so the IPMI web UI loads directly to the dashboard.
+func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	var serverCfg *models.ServerConfig
+	for i := range s.Config.Servers {
+		if s.Config.Servers[i].Name == name {
+			serverCfg = &s.Config.Servers[i]
+			break
+		}
+	}
+	if serverCfg == nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+
+	if s.Config.OIDC.Enabled {
+		user := kvmoidc.UserFromContext(r.Context())
+		if !kvmoidc.UserCanAccessServer(&s.Config.OIDC, user, name) {
+			writeError(w, http.StatusForbidden, "access denied")
+			return
+		}
+	}
+
+	password, err := config.GetPassword(serverCfg)
+	if err != nil {
+		log.Printf("IPMI session for %s: failed to get password: %v", name, err)
+		writeError(w, http.StatusInternalServerError, "BMC password not configured")
+		return
+	}
+
+	authenticator, ok := auth.Get(serverCfg.BoardType)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "unsupported board type")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	creds, err := authenticator.CreateWebSession(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
+	if err != nil {
+		log.Printf("IPMI session for %s: auth failed: %v", name, err)
+		writeError(w, http.StatusBadGateway, "BMC authentication failed")
+		return
+	}
+
+	// Inject credentials into the BMC proxy so all proxied requests
+	// carry the session cookie and CSRF token automatically.
+	entry := getOrCreateProxy(serverCfg, name)
+	entry.setBMCCredentials(creds)
+
+	log.Printf("IPMI session for %s: authenticated, credentials injected into proxy", name)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_cookie": creds.SessionCookie,
+		"csrf_token":     creds.CSRFToken,
+		"username":       creds.Username,
+		"privilege":      creds.Privilege,
+		"extended_priv":  creds.ExtendedPriv,
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
-}
-
-// IPMIPorts handles GET /api/ipmi-ports - returns proxy port for each server.
-func (s *Server) IPMIPorts(w http.ResponseWriter, r *http.Request) {
-	if s.IPMIProxies == nil {
-		writeJSON(w, http.StatusOK, map[string]int{})
-		return
-	}
-
-	user := kvmoidc.UserFromContext(r.Context())
-	oidcEnabled := s.Config.OIDC.Enabled
-
-	ports := make(map[string]int)
-	for _, srv := range s.Config.Servers {
-		if oidcEnabled && !kvmoidc.UserCanAccessServer(&s.Config.OIDC, user, srv.Name) {
-			continue
-		}
-		if port := s.IPMIProxies.GetPort(srv.Name); port != 0 {
-			ports[srv.Name] = port
-		}
-	}
-	writeJSON(w, http.StatusOK, ports)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

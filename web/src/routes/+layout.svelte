@@ -8,6 +8,17 @@
 	$effect(() => {
 		fetchAuthStatus().then((s) => (auth = s)).catch(() => (auth = null));
 	});
+
+	$effect(() => {
+		if ('serviceWorker' in navigator) {
+			navigator.serviceWorker
+				.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+				.then((reg) => {
+					// Check for updates on every page load
+					reg.update();
+				});
+		}
+	});
 </script>
 
 <div class="min-h-screen bg-gray-950 text-gray-100">

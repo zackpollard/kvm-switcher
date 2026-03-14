@@ -67,6 +67,33 @@ func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, po
 	return creds, args, nil
 }
 
+func (m *MegaRACAuthenticator) CreateWebSession(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, error) {
+	baseURL := fmt.Sprintf("http://%s:%d", host, port)
+
+	sessResp, err := m.createSession(ctx, baseURL, username, password)
+	if err != nil {
+		return nil, fmt.Errorf("creating BMC session: %w", err)
+	}
+
+	creds := &models.BMCCredentials{
+		SessionCookie: sessResp.SessionCookie,
+		CSRFToken:     sessResp.CSRFToken,
+	}
+
+	// Fetch user role info — the BMC web UI reads Username/PNO/Extendedpriv
+	// cookies to decide whether to render the dashboard or a blank page.
+	role, err := m.getRole(ctx, baseURL, sessResp)
+	if err != nil {
+		log.Printf("Warning: failed to get BMC role info: %v", err)
+	} else {
+		creds.Username = role.username
+		creds.Privilege = role.privilege
+		creds.ExtendedPriv = role.extendedPriv
+	}
+
+	return creds, nil
+}
+
 func (m *MegaRACAuthenticator) Logout(ctx context.Context, host string, port int, creds *models.BMCCredentials) error {
 	baseURL := fmt.Sprintf("http://%s:%d", host, port)
 	sessResp := &sessionResponse{
@@ -148,6 +175,63 @@ func (m *MegaRACAuthenticator) logoutWithSession(ctx context.Context, baseURL st
 	return nil
 }
 
+// roleInfo holds parsed user privilege data from /rpc/getrole.asp.
+type roleInfo struct {
+	username     string
+	privilege    int
+	extendedPriv int
+}
+
+func (m *MegaRACAuthenticator) getRole(ctx context.Context, baseURL string, sess *sessionResponse) (*roleInfo, error) {
+	endpoint := baseURL + "/rpc/getrole.asp"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Cookie", "SessionCookie="+sess.SessionCookie)
+	req.Header.Set("X-CSRFTOKEN", sess.CSRFToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := readBodyTolerant(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	return parseRoleResponse(string(body))
+}
+
+func parseRoleResponse(body string) (*roleInfo, error) {
+	statusRe := regexp.MustCompile(`HAPI_STATUS:(-?\d+)`)
+	if m := statusRe.FindStringSubmatch(body); m != nil && m[1] != "0" {
+		return nil, fmt.Errorf("getrole returned HAPI_STATUS:%s", m[1])
+	}
+
+	role := &roleInfo{}
+
+	usernameRe := regexp.MustCompile(`'CURUSERNAME'\s*:\s*'([^']*)'`)
+	if m := usernameRe.FindStringSubmatch(body); m != nil {
+		role.username = m[1]
+	}
+
+	privRe := regexp.MustCompile(`'CURPRIV'\s*:\s*(\d+)`)
+	if m := privRe.FindStringSubmatch(body); m != nil {
+		fmt.Sscanf(m[1], "%d", &role.privilege)
+	}
+
+	extPrivRe := regexp.MustCompile(`'EXTENDED_PRIV'\s*:\s*(\d+)`)
+	if m := extPrivRe.FindStringSubmatch(body); m != nil {
+		fmt.Sscanf(m[1], "%d", &role.extendedPriv)
+	}
+
+	return role, nil
+}
+
 // readBodyTolerant reads an HTTP response body, tolerating premature connection closes.
 // AMI MegaRAC BMCs use HTTP/1.0 and frequently close the connection before delivering
 // all bytes advertised by Content-Length. This function returns whatever data was received
@@ -173,6 +257,14 @@ func readBodyTolerant(r io.Reader) ([]byte, error) {
 // parseSessionResponse extracts SESSION_COOKIE, BMC_IP_ADDR, and CSRFTOKEN from the
 // JavaScript-like response body of /rpc/WEBSES/create.asp.
 func parseSessionResponse(body string) (*sessionResponse, error) {
+	// Check HAPI_STATUS first — non-zero means the BMC rejected the request
+	statusRe := regexp.MustCompile(`HAPI_STATUS:(-?\d+)`)
+	if statusMatch := statusRe.FindStringSubmatch(body); statusMatch != nil {
+		if statusMatch[1] != "0" {
+			return nil, fmt.Errorf("BMC returned HAPI_STATUS:%s (login failed)", statusMatch[1])
+		}
+	}
+
 	cookieRe := regexp.MustCompile(`'SESSION_COOKIE'\s*:\s*'([^']+)'`)
 	bmcIPRe := regexp.MustCompile(`'BMC_IP_ADDR'\s*:\s*'([^']+)'`)
 	csrfRe := regexp.MustCompile(`'CSRFTOKEN'\s*:\s*'([^']+)'`)

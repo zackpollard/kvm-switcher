@@ -61,9 +61,20 @@ export function getKVMWebSocketURL(sessionId: string): string {
 	return `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
 }
 
-export async function fetchIPMIPorts(): Promise<Record<string, number>> {
-	const res = await fetch(`${API_BASE}/ipmi-ports`);
-	if (!res.ok) return {};
+export interface IPMISession {
+	session_cookie: string;
+	csrf_token: string;
+	username: string;
+	privilege: number;
+	extended_priv: number;
+}
+
+export async function createIPMISession(name: string): Promise<IPMISession> {
+	const res = await fetch(`${API_BASE}/ipmi-session/${name}`, { method: 'POST' });
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
 	return res.json();
 }
 

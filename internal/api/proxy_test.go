@@ -39,189 +39,24 @@ func newMockBMC(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /api/check-cookies", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		hasKVMSession := false
+		sessionCookieVal := ""
+		csrfToken := r.Header.Get("CSRFTOKEN")
 		for _, c := range r.Cookies() {
 			if c.Name == "kvm_session" {
 				hasKVMSession = true
 			}
+			if c.Name == "SessionCookie" {
+				sessionCookieVal = c.Value
+			}
 		}
-		fmt.Fprintf(w, `{"has_kvm_session":%v}`, hasKVMSession)
+		fmt.Fprintf(w, `{"has_kvm_session":%v,"session_cookie":%q,"csrf_token":%q}`, hasKVMSession, sessionCookieVal, csrfToken)
 	})
 
 	return httptest.NewServer(mux)
 }
 
-func TestIPMIProxyManager_StartsListeners(t *testing.T) {
-	bmc := newMockBMC(t)
-	defer bmc.Close()
-
-	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
-	port := 80
-	fmt.Sscanf(portStr, "%d", &port)
-
-	cfg := &models.AppConfig{
-		Servers: []models.ServerConfig{
-			{Name: "test-bmc", BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
-		},
-	}
-
-	mgr, err := NewIPMIProxyManager(cfg)
-	if err != nil {
-		t.Fatalf("NewIPMIProxyManager() error: %v", err)
-	}
-	defer mgr.Close()
-
-	p := mgr.GetPort("test-bmc")
-	if p == 0 {
-		t.Fatal("expected non-zero port for test-bmc")
-	}
-
-	// Request through the proxy
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", p))
-	if err != nil {
-		t.Fatalf("GET / error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want 200", resp.StatusCode)
-	}
-}
-
-func TestIPMIProxyManager_NoContentRewriting(t *testing.T) {
-	bmc := newMockBMC(t)
-	defer bmc.Close()
-
-	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
-	port := 80
-	fmt.Sscanf(portStr, "%d", &port)
-
-	cfg := &models.AppConfig{
-		Servers: []models.ServerConfig{
-			{Name: "test-bmc", BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
-		},
-	}
-
-	mgr, err := NewIPMIProxyManager(cfg)
-	if err != nil {
-		t.Fatalf("NewIPMIProxyManager() error: %v", err)
-	}
-	defer mgr.Close()
-
-	p := mgr.GetPort("test-bmc")
-
-	// HTML content should pass through UNMODIFIED
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", p))
-	if err != nil {
-		t.Fatalf("GET / error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	body := string(bodyBytes)
-
-	if !strings.Contains(body, `<title>BMC</title>`) {
-		t.Errorf("HTML content was modified.\nbody: %s", body)
-	}
-	// No proxy prefix should appear in the content
-	if strings.Contains(body, "ipmi") {
-		t.Errorf("proxy prefix found in content, should be unmodified.\nbody: %s", body)
-	}
-}
-
-func TestIPMIProxyManager_JSONPassthrough(t *testing.T) {
-	bmc := newMockBMC(t)
-	defer bmc.Close()
-
-	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
-	port := 80
-	fmt.Sscanf(portStr, "%d", &port)
-
-	cfg := &models.AppConfig{
-		Servers: []models.ServerConfig{
-			{Name: "test-bmc", BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
-		},
-	}
-
-	mgr, err := NewIPMIProxyManager(cfg)
-	if err != nil {
-		t.Fatalf("NewIPMIProxyManager() error: %v", err)
-	}
-	defer mgr.Close()
-
-	p := mgr.GetPort("test-bmc")
-
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/rpc/status", p))
-	if err != nil {
-		t.Fatalf("GET /rpc/status error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]string
-	json.NewDecoder(resp.Body).Decode(&result)
-	if result["status"] != "ok" {
-		t.Errorf("JSON response corrupted: %v", result)
-	}
-}
-
-func TestIPMIProxyManager_CookieStripping(t *testing.T) {
-	bmc := newMockBMC(t)
-	defer bmc.Close()
-
-	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
-	port := 80
-	fmt.Sscanf(portStr, "%d", &port)
-
-	cfg := &models.AppConfig{
-		Servers: []models.ServerConfig{
-			{Name: "test-bmc", BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
-		},
-	}
-
-	mgr, err := NewIPMIProxyManager(cfg)
-	if err != nil {
-		t.Fatalf("NewIPMIProxyManager() error: %v", err)
-	}
-	defer mgr.Close()
-
-	p := mgr.GetPort("test-bmc")
-
-	req, _ := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/api/check-cookies", p), nil)
-	req.AddCookie(&http.Cookie{Name: "kvm_session", Value: "should-strip"})
-	req.AddCookie(&http.Cookie{Name: "BMCSession", Value: "should-keep"})
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("request error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
-	if result["has_kvm_session"] == true {
-		t.Error("kvm_session cookie should have been stripped")
-	}
-}
-
-func TestIPMIProxyManager_UnknownServer(t *testing.T) {
-	cfg := &models.AppConfig{
-		Servers: []models.ServerConfig{},
-	}
-
-	mgr, err := NewIPMIProxyManager(cfg)
-	if err != nil {
-		t.Fatalf("NewIPMIProxyManager() error: %v", err)
-	}
-	defer mgr.Close()
-
-	if p := mgr.GetPort("nonexistent"); p != 0 {
-		t.Errorf("expected 0 for unknown server, got %d", p)
-	}
-}
-
-func TestIPMIPorts_Endpoint(t *testing.T) {
-	bmc := newMockBMC(t)
-	defer bmc.Close()
-
+func newTestBMCServer(t *testing.T, bmc *httptest.Server) *Server {
+	t.Helper()
 	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
 	port := 80
 	fmt.Sscanf(portStr, "%d", &port)
@@ -233,27 +68,200 @@ func TestIPMIPorts_Endpoint(t *testing.T) {
 		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
 	}
 
-	mgr, err := NewIPMIProxyManager(cfg)
-	if err != nil {
-		t.Fatalf("NewIPMIProxyManager() error: %v", err)
-	}
-	defer mgr.Close()
+	// Clear cached proxy from previous tests
+	bmcProxies.Delete("test-bmc")
 
-	srv := NewServer(cfg, &mockContainerManager{})
-	srv.IPMIProxies = mgr
+	return NewServer(cfg, &mockContainerManager{})
+}
 
-	req := httptest.NewRequest("GET", "/api/ipmi-ports", nil)
+func TestHandleBMCProxy_BasicRequest(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/", nil)
 	w := httptest.NewRecorder()
-	srv.IPMIPorts(w, req)
+	srv.HandleBMCProxy(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+		t.Errorf("status = %d, want 200", w.Code)
 	}
 
-	var ports map[string]int
-	json.NewDecoder(w.Body).Decode(&ports)
+	body := w.Body.String()
+	if !strings.Contains(body, "<title>BMC</title>") {
+		t.Errorf("unexpected body: %s", body)
+	}
+}
 
-	if ports["test-bmc"] == 0 {
-		t.Error("expected non-zero port for test-bmc in response")
+func TestHandleBMCProxy_SubPath(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/page/login.html", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Login") {
+		t.Errorf("unexpected body: %s", body)
+	}
+}
+
+func TestHandleBMCProxy_UnknownServer(t *testing.T) {
+	cfg := &models.AppConfig{
+		Servers:  []models.ServerConfig{},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+	srv := NewServer(cfg, &mockContainerManager{})
+
+	req := httptest.NewRequest("GET", "/__bmc/nonexistent/", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleBMCProxy_CookieStripping(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/api/check-cookies", nil)
+	req.AddCookie(&http.Cookie{Name: "kvm_session", Value: "should-strip"})
+	req.AddCookie(&http.Cookie{Name: "BMCSession", Value: "should-keep"})
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["has_kvm_session"] == true {
+		t.Error("kvm_session cookie should have been stripped")
+	}
+}
+
+func TestHandleBMCProxy_LocationRewrite(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	// Create a real test server to get actual HTTP redirect behavior
+	ts := httptest.NewServer(http.HandlerFunc(srv.HandleBMCProxy))
+	defer ts.Close()
+
+	resp, err := client.Get(ts.URL + "/__bmc/test-bmc/redirect")
+	if err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("status = %d, want 302", resp.StatusCode)
+	}
+
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/__bmc/test-bmc/") {
+		t.Errorf("Location = %q, want prefix /__bmc/test-bmc/", loc)
+	}
+}
+
+func TestHandleBMCProxy_JSONPassthrough(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/rpc/status", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+	if result["status"] != "ok" {
+		t.Errorf("JSON response corrupted: %v", result)
+	}
+}
+
+func TestHandleBMCProxy_NoContentRewriting(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	bodyBytes, _ := io.ReadAll(w.Body)
+	body := string(bodyBytes)
+
+	if !strings.Contains(body, `<title>BMC</title>`) {
+		t.Errorf("HTML content was modified.\nbody: %s", body)
+	}
+	if strings.Contains(body, "__bmc") || strings.Contains(body, "ipmi") {
+		t.Errorf("proxy prefix found in content, should be unmodified.\nbody: %s", body)
+	}
+}
+
+func TestHandleBMCProxy_BMCCredentialInjection(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	// Inject pre-authenticated BMC credentials into the proxy
+	serverCfg := &srv.Config.Servers[0]
+	entry := getOrCreateProxy(serverCfg, "test-bmc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "test-session-123",
+		CSRFToken:     "test-csrf-456",
+	})
+
+	// Make a request — credentials should be injected automatically
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/api/check-cookies", nil)
+	// Also add a browser SessionCookie to verify it gets replaced, not duplicated
+	req.AddCookie(&http.Cookie{Name: "SessionCookie", Value: "stale-browser-cookie"})
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	var result map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result["session_cookie"] != "test-session-123" {
+		t.Errorf("SessionCookie = %q, want %q", result["session_cookie"], "test-session-123")
+	}
+	if result["csrf_token"] != "test-csrf-456" {
+		t.Errorf("X-CSRFTOKEN = %q, want %q", result["csrf_token"], "test-csrf-456")
+	}
+}
+
+func TestRewriteLocationForBMC(t *testing.T) {
+	tests := []struct {
+		name      string
+		loc       string
+		bmcOrigin string
+		server    string
+		want      string
+	}{
+		{"absolute URL", "http://10.0.0.1:80/page/login.html", "http://10.0.0.1:80", "srv1", "/__bmc/srv1/page/login.html"},
+		{"root-relative", "/page/login.html", "http://10.0.0.1:80", "srv1", "/__bmc/srv1/page/login.html"},
+		{"relative (no leading slash)", "page/login.html", "http://10.0.0.1:80", "srv1", "page/login.html"},
+		{"external URL", "https://example.com/foo", "http://10.0.0.1:80", "srv1", "https://example.com/foo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteLocationForBMC(tt.loc, tt.bmcOrigin, tt.server)
+			if got != tt.want {
+				t.Errorf("rewriteLocationForBMC(%q) = %q, want %q", tt.loc, got, tt.want)
+			}
+		})
 	}
 }

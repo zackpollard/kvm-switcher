@@ -4,76 +4,100 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
 
 	"github.com/zackpollard/kvm-switcher/internal/models"
-	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
 
-// ipmiProxyTransport is shared across all IPMI proxy requests.
-var ipmiProxyTransport = &http.Transport{
-	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+// bmcProxyEntry holds a reverse proxy and its cookie jar for a single BMC.
+type bmcProxyEntry struct {
+	proxy    *httputil.ReverseProxy
+	jar      http.CookieJar
+	mu       sync.RWMutex
+	bmcCreds *models.BMCCredentials // pre-authenticated BMC session credentials
 }
 
-// IPMIProxyManager manages per-server reverse proxy listeners.
-// Each BMC gets its own port so content is served at the root path,
-// avoiding any response body rewriting.
-type IPMIProxyManager struct {
-	mu      sync.Mutex
-	ports   map[string]int // server name -> allocated port
-	servers map[string]*http.Server
-	config  *models.AppConfig
-	oidc    bool
+func (e *bmcProxyEntry) setBMCCredentials(creds *models.BMCCredentials) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.bmcCreds = creds
 }
 
-// NewIPMIProxyManager creates the manager and starts a listener for each server.
-func NewIPMIProxyManager(cfg *models.AppConfig) (*IPMIProxyManager, error) {
-	m := &IPMIProxyManager{
-		ports:   make(map[string]int),
-		servers: make(map[string]*http.Server),
-		config:  cfg,
-		oidc:    cfg.OIDC.Enabled,
+func (e *bmcProxyEntry) getBMCCredentials() *models.BMCCredentials {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.bmcCreds
+}
+
+// bmcProxies caches a proxy entry per server name.
+var bmcProxies sync.Map // map[string]*bmcProxyEntry
+
+// HandleBMCProxy handles /__bmc/{name}/{path...} — reverse-proxies to the BMC.
+func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
+	// Extract server name from path: /__bmc/{name}/...
+	path := strings.TrimPrefix(r.URL.Path, "/__bmc/")
+	slashIdx := strings.Index(path, "/")
+	var name, remainder string
+	if slashIdx < 0 {
+		name = path
+		remainder = "/"
+	} else {
+		name = path[:slashIdx]
+		remainder = path[slashIdx:]
 	}
 
-	for i := range cfg.Servers {
-		srv := &cfg.Servers[i]
-		port, err := m.startProxy(srv)
-		if err != nil {
-			m.Close()
-			return nil, fmt.Errorf("starting IPMI proxy for %s: %w", srv.Name, err)
+	if name == "" {
+		http.Error(w, "missing server name", http.StatusBadRequest)
+		return
+	}
+
+	// Find server config
+	var serverCfg *models.ServerConfig
+	for i := range s.Config.Servers {
+		if s.Config.Servers[i].Name == name {
+			serverCfg = &s.Config.Servers[i]
+			break
 		}
-		log.Printf("IPMI proxy for %s (%s:%d) listening on port %d", srv.Name, srv.BMCIP, srv.BMCPort, port)
-		m.ports[srv.Name] = port
+	}
+	if serverCfg == nil {
+		http.Error(w, "unknown server", http.StatusNotFound)
+		return
 	}
 
-	return m, nil
-}
+	// Get or create cached proxy
+	entry := getOrCreateProxy(serverCfg, name)
 
-// GetPort returns the local proxy port for a server, or 0 if not found.
-func (m *IPMIProxyManager) GetPort(serverName string) int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.ports[serverName]
-}
-
-// Close shuts down all proxy listeners.
-func (m *IPMIProxyManager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for name, srv := range m.servers {
-		srv.Close()
-		delete(m.servers, name)
+	// Rewrite the request path to the remainder
+	r.URL.Path = remainder
+	if r.URL.RawPath != "" {
+		r.URL.RawPath = remainder
 	}
+
+	entry.proxy.ServeHTTP(w, r)
 }
 
-func (m *IPMIProxyManager) startProxy(serverCfg *models.ServerConfig) (int, error) {
+// getOrCreateProxy returns a cached proxy entry for the given server.
+func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntry {
+	if v, ok := bmcProxies.Load(name); ok {
+		return v.(*bmcProxyEntry)
+	}
+
 	bmcOrigin := fmt.Sprintf("http://%s:%d", serverCfg.BMCIP, serverCfg.BMCPort)
 	target, _ := url.Parse(bmcOrigin)
+
+	// Cookie jar stores BMC session cookies server-side.
+	// Browsers can't set cookies from SW respondWith() responses,
+	// so the backend must manage them.
+	jar, _ := cookiejar.New(nil)
+
+	// Create entry first so the proxy closures can reference it
+	// for pre-authenticated BMC credentials.
+	entry := &bmcProxyEntry{jar: jar}
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -81,13 +105,38 @@ func (m *IPMIProxyManager) startProxy(serverCfg *models.ServerConfig) (int, erro
 			req.URL.Host = target.Host
 			req.Host = target.Host
 
-			// Strip our auth cookies
-			filterCookies(req, "kvm_session", "kvm_oauth_state")
+			// Strip our auth cookies and browser-side BMC cookies
+			// (the proxy manages BMC session cookies server-side)
+			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie")
+
+			// Add stored BMC cookies from the jar
+			for _, c := range jar.Cookies(req.URL) {
+				req.AddCookie(c)
+			}
+
+			// Inject pre-authenticated BMC credentials if available.
+			// This ensures all proxied requests carry the session cookie
+			// and CSRF token, even if the browser/SW didn't send them.
+			if creds := entry.getBMCCredentials(); creds != nil {
+				req.AddCookie(&http.Cookie{Name: "SessionCookie", Value: creds.SessionCookie})
+				if creds.CSRFToken != "" {
+					// AMI MegaRAC checks the "CSRFTOKEN" header (no X- prefix)
+					// on non-WEBSES endpoints. Set it so all proxied requests
+					// pass CSRF validation even before the browser has the token.
+					req.Header.Set("CSRFTOKEN", creds.CSRFToken)
+				}
+			}
+
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			// Store any Set-Cookie from the BMC in our jar
+			if cookies := resp.Header["Set-Cookie"]; len(cookies) > 0 {
+				jar.SetCookies(resp.Request.URL, resp.Cookies())
+			}
+
 			// Rewrite Location header so redirects stay through the proxy
 			if loc := resp.Header.Get("Location"); loc != "" {
-				resp.Header.Set("Location", rewriteLocationToLocal(loc, bmcOrigin))
+				resp.Header.Set("Location", rewriteLocationForBMC(loc, bmcOrigin, name))
 			}
 
 			// Remove headers that block framing/embedding
@@ -95,59 +144,41 @@ func (m *IPMIProxyManager) startProxy(serverCfg *models.ServerConfig) (int, erro
 			resp.Header.Del("X-Frame-Options")
 			return nil
 		},
-		Transport: ipmiProxyTransport,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("IPMI proxy error for %s: %v", serverCfg.Name, err)
+			log.Printf("BMC proxy error for %s: %v", name, err)
 			http.Error(w, "BMC unreachable: "+err.Error(), http.StatusBadGateway)
 		},
 	}
 
-	// Wrap with OIDC check if enabled
-	var handler http.Handler = proxy
-	if m.oidc {
-		serverName := serverCfg.Name
-		oidcCfg := &m.config.OIDC
-		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user := kvmoidc.UserFromContext(r.Context())
-			if !kvmoidc.UserCanAccessServer(oidcCfg, user, serverName) {
-				http.Error(w, "access denied", http.StatusForbidden)
-				return
-			}
-			proxy.ServeHTTP(w, r)
-		})
-	}
-
-	// Listen on ephemeral port
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
-	}
-
-	port := ln.Addr().(*net.TCPAddr).Port
-	srv := &http.Server{Handler: handler}
-
-	m.mu.Lock()
-	m.servers[serverCfg.Name] = srv
-	m.mu.Unlock()
-
-	go srv.Serve(ln)
-
-	return port, nil
+	entry.proxy = proxy
+	actual, _ := bmcProxies.LoadOrStore(name, entry)
+	return actual.(*bmcProxyEntry)
 }
 
-// rewriteLocationToLocal strips the BMC origin from absolute Location headers,
-// converting them to root-relative paths so the browser stays on the proxy port.
-func rewriteLocationToLocal(loc, bmcOrigin string) string {
+// rewriteLocationForBMC converts BMC Location headers to /__bmc/{name}/... paths.
+func rewriteLocationForBMC(loc, bmcOrigin, name string) string {
+	prefix := "/__bmc/" + name
+
+	// Absolute URL from BMC -> strip origin, add prefix
 	if strings.HasPrefix(loc, bmcOrigin) {
-		return strings.TrimPrefix(loc, bmcOrigin)
+		return prefix + strings.TrimPrefix(loc, bmcOrigin)
 	}
-	// Also handle without explicit port (BMC might omit :80)
+	// Handle without explicit port (BMC might omit :80)
 	if idx := strings.Index(bmcOrigin, ":80"); idx > 0 {
 		noPort := bmcOrigin[:idx]
 		if strings.HasPrefix(loc, noPort) {
-			return strings.TrimPrefix(loc, noPort)
+			return prefix + strings.TrimPrefix(loc, noPort)
 		}
 	}
+
+	// Root-relative path from BMC -> add prefix
+	if strings.HasPrefix(loc, "/") {
+		return prefix + loc
+	}
+
 	return loc
 }
 
@@ -169,22 +200,4 @@ func filterCookies(req *http.Request, names ...string) {
 			req.AddCookie(c)
 		}
 	}
-}
-
-// isTextContent returns true if the Content-Type indicates text-based content.
-func isTextContent(ct string) bool {
-	ct = strings.ToLower(ct)
-	return strings.Contains(ct, "text/html") ||
-		strings.Contains(ct, "text/javascript") ||
-		strings.Contains(ct, "application/javascript") ||
-		strings.Contains(ct, "text/css") ||
-		strings.Contains(ct, "application/json") ||
-		strings.Contains(ct, "text/xml") ||
-		strings.Contains(ct, "application/xml")
-}
-
-// HandleIPMIProxy handles /api/ipmi-ports to return the proxy port mapping.
-func (s *Server) HandleIPMIProxy(w http.ResponseWriter, r *http.Request) {
-	// This is now unused for direct proxying - see IPMIProxyManager
-	writeError(w, http.StatusNotFound, "use /api/ipmi-ports for proxy port mapping")
 }
