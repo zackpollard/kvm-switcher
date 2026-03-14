@@ -188,7 +188,7 @@
 				</div>
 			</div>
 		{:else if session?.status === 'connected'}
-			<KVMViewer wsUrl={getKVMWebSocketURL(activeSessionId)} container={viewerContainer} ondisconnect={handleViewerDisconnect} />
+			<KVMViewer wsUrl={getKVMWebSocketURL(activeSessionId)} container={viewerContainer} ondisconnect={handleViewerDisconnect} password={session?.kvm_password} />
 		{:else if session?.status === 'disconnected'}
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">

@@ -13,6 +13,8 @@ export interface KVMSession {
 	status: 'starting' | 'connected' | 'disconnected' | 'error';
 	container_id?: string;
 	websocket_port?: number;
+	conn_mode?: string;
+	kvm_password?: string;
 	created_at: string;
 	last_activity: string;
 	error?: string;
@@ -62,6 +64,7 @@ export function getKVMWebSocketURL(sessionId: string): string {
 }
 
 export interface IPMISession {
+	board_type: string;
 	session_cookie: string;
 	csrf_token: string;
 	username: string;

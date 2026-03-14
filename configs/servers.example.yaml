@@ -13,6 +13,20 @@ servers:
     username: "admin"
     credential_env: "BMC_PASSWORD_SERVER2"
 
+  # Dell iDRAC9 (14G+, e.g. R640) — HTML5 KVM via WSS, no container needed
+  - name: "dell-14g"
+    bmc_ip: "10.10.11.194"
+    board_type: "dell_idrac9"    # port defaults to 443
+    username: "root"
+    credential_env: "BMC_PASSWORD_DELL"
+
+  # Dell iDRAC8 (13G, e.g. R730xd) — VNC KVM on port 5901, no container needed
+  - name: "dell-13g"
+    bmc_ip: "10.10.11.92"
+    board_type: "dell_idrac8"    # port defaults to 443
+    username: "root"
+    credential_env: "BMC_PASSWORD_DELL"
+
 settings:
   # Container runtime: "docker" or "kubernetes"
   runtime: "docker"

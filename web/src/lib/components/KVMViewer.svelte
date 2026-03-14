@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 
-	let { wsUrl, container, ondisconnect }: { wsUrl: string; container: HTMLDivElement; ondisconnect?: () => void } = $props();
+	let { wsUrl, container, ondisconnect, password }: { wsUrl: string; container: HTMLDivElement; ondisconnect?: () => void; password?: string } = $props();
 
 	let canvasContainer: HTMLDivElement;
 	let rfb: any = null;
@@ -33,7 +33,11 @@
 			});
 
 			rfb.addEventListener('credentialsrequired', () => {
-				status = 'Credentials required';
+				if (password && rfb) {
+					rfb.sendCredentials({ password });
+				} else {
+					status = 'Credentials required';
+				}
 			});
 
 			rfb.addEventListener('desktopname', (e: any) => {

@@ -40,7 +40,7 @@ type jnlpApplicationDesc struct {
 	Arguments []string `xml:"argument"`
 }
 
-func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, *models.JViewerArgs, error) {
+func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, *models.KVMConnectInfo, error) {
 	baseURL := fmt.Sprintf("http://%s:%d", host, port)
 
 	// Step 1: Create session
@@ -64,7 +64,12 @@ func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, po
 		WebCookie:     args.WebCookie,
 	}
 
-	return creds, args, nil
+	connectInfo := &models.KVMConnectInfo{
+		Mode:          models.KVMModeContainer,
+		ContainerArgs: args,
+	}
+
+	return creds, connectInfo, nil
 }
 
 func (m *MegaRACAuthenticator) CreateWebSession(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, error) {

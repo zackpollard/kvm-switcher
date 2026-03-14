@@ -31,23 +31,20 @@
 			openingIPMI = serverName;
 			error = '';
 			const session = await createIPMISession(serverName);
-			document.cookie = `SessionCookie=${session.session_cookie};path=/`;
-			document.cookie = `CSRFTOKEN=${session.csrf_token};path=/`;
-			// BMC web UI reads these cookies to determine user role.
-			// Without PNO >= 2, main_imp.js clears the page body.
-			document.cookie = `Username=${session.username};path=/`;
-			document.cookie = `PNO=${session.privilege};path=/`;
-			document.cookie = `Extendedpriv=${session.extended_priv};path=/`;
-			// BMC's enableFeaturesList accesses top.settings.features —
-			// without a settings cookie, header_imp.js sets top.settings=null
-			// which causes a TypeError. Set a minimal object so it's not null.
-			document.cookie = `settings={};path=/`;
-			// Delete SessionExpired cookie rather than setting it to "false".
-			// The BMC's fnCookie.read converts "false" to boolean false, but
-			// loadFrames() checks `sessionexpire == "false"` (string comparison),
-			// which fails for boolean false. When the cookie is absent,
-			// fnCookie.read returns null, and `null == null` passes the check.
-			document.cookie = 'SessionExpired=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+
+			if (session.board_type === 'ami_megarac') {
+				// AMI MegaRAC: set cookies the BMC client-side JS expects
+				document.cookie = `SessionCookie=${session.session_cookie};path=/`;
+				document.cookie = `CSRFTOKEN=${session.csrf_token};path=/`;
+				document.cookie = `Username=${session.username};path=/`;
+				document.cookie = `PNO=${session.privilege};path=/`;
+				document.cookie = `Extendedpriv=${session.extended_priv};path=/`;
+				document.cookie = `settings={};path=/`;
+				document.cookie = 'SessionExpired=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+			}
+			// Dell iDRAC: auth is handled entirely server-side by the proxy,
+			// no browser cookies needed.
+
 			window.open(`/ipmi/${serverName}/`, '_blank');
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to open IPMI';
