@@ -2,6 +2,7 @@
 // Intercepts requests from BMC pages and rewrites them to /__bmc/{name}/...
 
 const clientServerMap = new Map(); // clientId -> serverName
+const knownServers = new Set(); // server names confirmed via navigation
 
 // Last known server name — used as fallback when clientId and Referer
 // both fail (e.g., after BMC JS navigates the top frame to "/index.html").
@@ -47,22 +48,47 @@ self.addEventListener('fetch', (event) => {
 	// /ipmi/{name}/... -> extract name, track client, rewrite to /__bmc/{name}/...
 	const name = extractServerName(path);
 	if (name) {
-		const rest = path.slice('/ipmi/'.length + name.length) || '/';
-		// Map BOTH the initiating client and the resulting client (for navigations).
-		// When the BMC does top.location = "/page/login.html", a new client is
-		// created — we need it mapped so subsequent AJAX from that page resolves
-		// to the correct server even if another tab changes lastActiveServer.
-		if (event.clientId) clientServerMap.set(event.clientId, name);
-		if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
-		lastActiveServer = name;
-		event.respondWith(proxyToBMC(event.request, name, rest + url.search));
-		return;
+		// For navigation requests, the name is authoritative — add to known set.
+		// For sub-resource requests, only trust the name if we've seen it before
+		// in a navigation. This prevents false extractions like /ipmi/images/progress.gif
+		// (from ../images/progress.gif relative paths) from being treated as server names.
+		if (event.request.mode === 'navigate') {
+			knownServers.add(name);
+		}
+
+		if (knownServers.has(name)) {
+			const rest = path.slice('/ipmi/'.length + name.length) || '/';
+			if (event.clientId) clientServerMap.set(event.clientId, name);
+			if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
+			lastActiveServer = name;
+			event.respondWith(proxyToBMC(event.request, name, rest + url.search));
+			return;
+		}
+
+		// False extraction (e.g., /ipmi/images/progress.gif from a relative
+		// ../images/progress.gif on a BMC page). Strip the /ipmi/ prefix to
+		// recover the real BMC path and proxy via the active server.
+		const bmcPath = '/' + path.slice('/ipmi/'.length);
+		const serverName = resolveServer(event);
+		if (serverName) {
+			event.respondWith(proxyToBMC(event.request, serverName, bmcPath + url.search));
+			return;
+		}
 	}
 
 	// Resolve which BMC server this request belongs to
 	let serverName = resolveServer(event);
 
 	if (serverName) {
+		// For navigation requests not already under /ipmi/{name}/, redirect
+		// so the browser URL bar shows the correct prefixed path. This
+		// prevents the BMC's JS navigations (e.g., top.location = "/login.html")
+		// from losing the /ipmi/ prefix.
+		if (event.request.mode === 'navigate') {
+			const redirectUrl = '/ipmi/' + serverName + path + url.search;
+			event.respondWith(Response.redirect(redirectUrl, 302));
+			return;
+		}
 		event.respondWith(proxyToBMC(event.request, serverName, path + url.search));
 		return;
 	}
@@ -142,6 +168,8 @@ function resolveServer(event) {
 async function proxyToBMC(request, name, path) {
 	try {
 		const bmcUrl = '/__bmc/' + name + path;
+		const bmcPrefix = '/__bmc/' + name;
+		const ipmiPrefix = '/ipmi/' + name;
 
 		// Forward request headers and body.
 		// For navigation requests (mode=navigate), use minimal headers to
@@ -165,6 +193,20 @@ async function proxyToBMC(request, name, path) {
 		}
 
 		const resp = await fetch(bmcUrl, opts);
+
+		// If the fetch followed a redirect (resp.url differs from bmcUrl),
+		// and this is a navigation request, send a redirect response to the
+		// browser so the URL bar updates. This ensures relative paths in the
+		// BMC HTML resolve correctly (e.g., iDRAC9 redirects / →
+		// /restgui/start.html, and CSS paths must be relative to that path).
+		if (request.mode === 'navigate' && resp.url) {
+			const respUrl = new URL(resp.url);
+			const respPath = respUrl.pathname;
+			if (respPath.startsWith(bmcPrefix) && respPath !== bmcPrefix + path.split('?')[0]) {
+				const newPath = ipmiPrefix + respPath.slice(bmcPrefix.length);
+				return Response.redirect(newPath + respUrl.search, 302);
+			}
+		}
 
 		// Build a clean response — navigation responses from respondWith()
 		// can fail if the original has Set-Cookie headers or is flagged as

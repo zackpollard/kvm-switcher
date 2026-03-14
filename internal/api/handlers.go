@@ -371,6 +371,14 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
+	// Log out any existing BMC session before creating a new one to
+	// prevent session buildup (iDRACs have low session limits).
+	entry := getOrCreateProxy(serverCfg, name)
+	if oldCreds := entry.getBMCCredentials(); oldCreds != nil {
+		_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, oldCreds)
+		entry.setBMCCredentials(nil)
+	}
+
 	creds, err := authenticator.CreateWebSession(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
 	if err != nil {
 		log.Printf("IPMI session for %s: auth failed: %v", name, err)
@@ -380,7 +388,6 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 
 	// Inject credentials into the BMC proxy so all proxied requests
 	// carry the session cookie and CSRF token automatically.
-	entry := getOrCreateProxy(serverCfg, name)
 	entry.setBMCCredentials(creds)
 
 	log.Printf("IPMI session for %s: authenticated, credentials injected into proxy", name)
