@@ -213,10 +213,16 @@ async function proxyToBMC(request, name, path) {
 		// redirected. Constructing a fresh Response avoids these issues.
 		const headers = new Headers();
 		for (const [key, value] of resp.headers) {
-			// Browsers block Set-Cookie in SW responses; skip to avoid errors
-			if (key.toLowerCase() !== 'set-cookie') {
-				headers.set(key, value);
+			const lower = key.toLowerCase();
+			// Set-Cookie: browsers block this in SW responses.
+			// Content-Encoding: fetch() already decompressed the body, so
+			//   keeping this header causes the browser to try to decompress
+			//   again, producing corrupt data or triggering a file download.
+			// Content-Length: invalid after decompression (size changed).
+			if (lower === 'set-cookie' || lower === 'content-encoding' || lower === 'content-length') {
+				continue;
 			}
+			headers.set(key, value);
 		}
 
 		return new Response(resp.body, {
