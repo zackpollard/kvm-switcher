@@ -37,6 +37,34 @@ servers:
     username: "root"
     credential_env: "BMC_PASSWORD_DELL"
 
+  - name: "pdu-1"
+    bmc_ip: "10.10.11.144"
+    bmc_port: 80
+    board_type: "apc_ups"
+    username: "apc"
+    credential_env: "APC_PASSWORD"
+
+  - name: "pdu-2"
+    bmc_ip: "10.10.11.193"
+    bmc_port: 80
+    board_type: "apc_ups"
+    username: "apc"
+    credential_env: "APC_PASSWORD"
+
+  - name: "ups-1"
+    bmc_ip: "10.10.50.226"
+    bmc_port: 80
+    board_type: "apc_ups"
+    username: "apc"
+    credential_env: "APC_PASSWORD"
+
+  - name: "ups-2"
+    bmc_ip: "10.10.11.243"
+    bmc_port: 80
+    board_type: "apc_ups"
+    username: "apc"
+    credential_env: "APC_PASSWORD"
+
 settings:
   max_concurrent_sessions: 4
   session_timeout_minutes: 60

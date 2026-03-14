@@ -132,6 +132,16 @@ func handleLoginPageBypass(w http.ResponseWriter, r *http.Request, path string, 
 			log.Printf("BMC proxy: bypassing iDRAC8 login, redirecting to dashboard")
 			return true
 		}
+
+	case "apc_ups":
+		// APC NMC2: redirect / and login pages to home.htm (the dashboard).
+		// The proxy's Director adds the NMC session token, so home.htm loads
+		// authenticated without needing to go through the login form.
+		if path == "/" || strings.HasSuffix(path, "/logon.htm") {
+			http.Redirect(w, r, "home.htm", http.StatusFound)
+			log.Printf("BMC proxy: bypassing APC login, redirecting to dashboard")
+			return true
+		}
 	}
 
 	return false
@@ -248,6 +258,26 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			// Inject pre-authenticated BMC credentials (board-type-specific)
 			if creds := entry.getBMCCredentials(); creds != nil {
 				injectBMCCredentials(req, entry.boardType, creds)
+
+				// APC NMC2: session auth is URL-based. Prepend the NMC
+				// session path to every request. If the path already has
+				// /NMC/{token}/ (from absolute URLs in the HTML), strip
+				// the old token and replace with the current one.
+				if entry.boardType == "apc_ups" {
+					if nmcPath := creds.Extra["nmc_path"]; nmcPath != "" {
+						p := req.URL.Path
+						if strings.HasPrefix(p, "/NMC/") {
+							// /NMC/{old_token}/rest → /rest
+							if idx := strings.Index(p[5:], "/"); idx >= 0 {
+								p = p[5+idx:]
+							}
+						}
+						req.URL.Path = nmcPath + p
+						if req.URL.RawPath != "" {
+							req.URL.RawPath = nmcPath + p
+						}
+					}
+				}
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -258,7 +288,22 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 
 			// Rewrite Location header so redirects stay through the proxy
 			if loc := resp.Header.Get("Location"); loc != "" {
-				resp.Header.Set("Location", rewriteLocationForBMC(loc, bmcOrigin, name))
+				rewritten := rewriteLocationForBMC(loc, bmcOrigin, name)
+				// APC NMC2: strip /NMC/{token}/ from rewritten paths so the
+				// client sees clean paths (the proxy re-adds the token on
+				// the next request via the Director).
+				if entry.boardType == "apc_ups" {
+					prefix := "/__bmc/" + name
+					after := strings.TrimPrefix(rewritten, prefix)
+					if strings.HasPrefix(after, "/NMC/") {
+						if idx := strings.Index(after[5:], "/"); idx >= 0 {
+							rewritten = prefix + after[5+idx:]
+						} else {
+							rewritten = prefix + "/"
+						}
+					}
+				}
+				resp.Header.Set("Location", rewritten)
 			}
 
 			// iDRAC8 sets Content-Type: application/x-gzip on some responses
@@ -344,6 +389,10 @@ func injectBMCCredentials(req *http.Request, boardType string, creds *models.BMC
 		if creds.CSRFToken != "" {
 			req.Header.Set("ST2", creds.CSRFToken)
 		}
+
+	case "apc_ups":
+		// APC NMC2: auth is URL-based (session token in path). No cookies
+		// or headers needed — the Director prepends the NMC session path.
 
 	default:
 		// AMI MegaRAC: SessionCookie cookie + CSRFTOKEN header
