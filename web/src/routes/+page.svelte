@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { fetchServers, createSession, fetchIPMIPorts, type ServerInfo, type KVMSession } from '$lib/api';
+	import { fetchServers, createSession, createIPMISession, type ServerInfo, type KVMSession } from '$lib/api';
 	import { goto } from '$app/navigation';
 
 	let servers: ServerInfo[] = $state([]);
-	let ipmiPorts: Record<string, number> = $state({});
 	let loading = $state(true);
 	let error = $state('');
 	let connecting = $state<string | null>(null);
+	let openingIPMI = $state<string | null>(null);
 
 	async function loadServers() {
 		try {
@@ -19,7 +19,6 @@
 			}
 			if (!res.ok) throw new Error(`Failed to fetch servers: ${res.statusText}`);
 			servers = await res.json();
-			ipmiPorts = await fetchIPMIPorts();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load servers';
 		} finally {
@@ -27,10 +26,34 @@
 		}
 	}
 
-	function getIPMIUrl(serverName: string): string | null {
-		const port = ipmiPorts[serverName];
-		if (!port) return null;
-		return `${window.location.protocol}//${window.location.hostname}:${port}/`;
+	async function openIPMI(serverName: string) {
+		try {
+			openingIPMI = serverName;
+			error = '';
+			const session = await createIPMISession(serverName);
+			document.cookie = `SessionCookie=${session.session_cookie};path=/`;
+			document.cookie = `CSRFTOKEN=${session.csrf_token};path=/`;
+			// BMC web UI reads these cookies to determine user role.
+			// Without PNO >= 2, main_imp.js clears the page body.
+			document.cookie = `Username=${session.username};path=/`;
+			document.cookie = `PNO=${session.privilege};path=/`;
+			document.cookie = `Extendedpriv=${session.extended_priv};path=/`;
+			// BMC's enableFeaturesList accesses top.settings.features —
+			// without a settings cookie, header_imp.js sets top.settings=null
+			// which causes a TypeError. Set a minimal object so it's not null.
+			document.cookie = `settings={};path=/`;
+			// Delete SessionExpired cookie rather than setting it to "false".
+			// The BMC's fnCookie.read converts "false" to boolean false, but
+			// loadFrames() checks `sessionexpire == "false"` (string comparison),
+			// which fails for boolean false. When the cookie is absent,
+			// fnCookie.read returns null, and `null == null` passes the check.
+			document.cookie = 'SessionExpired=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+			window.open(`/ipmi/${serverName}/`, '_blank');
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to open IPMI';
+		} finally {
+			openingIPMI = null;
+		}
 	}
 
 	async function connect(serverName: string) {
@@ -110,16 +133,17 @@
 						{/if}
 
 						<div class="flex items-center gap-2">
-							{#if getIPMIUrl(server.name)}
-								<a
-									href={getIPMIUrl(server.name)}
-									target="_blank"
-									rel="noopener noreferrer"
-									class="rounded-md bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white"
-								>
+							<button
+								onclick={() => openIPMI(server.name)}
+								disabled={openingIPMI === server.name}
+								class="rounded-md bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+							>
+								{#if openingIPMI === server.name}
+									Opening...
+								{:else}
 									IPMI
-								</a>
-							{/if}
+								{/if}
+							</button>
 							<button
 								onclick={() => connect(server.name)}
 								disabled={connecting === server.name}

@@ -97,6 +97,9 @@ type BMCCredentials struct {
 	CSRFToken     string
 	KVMToken      string
 	WebCookie     string
+	Username      string // BMC username (from getrole.asp)
+	Privilege     int    // BMC privilege number (from getrole.asp), e.g. 4=Admin
+	ExtendedPriv  int    // Extended privileges bitmask (from getrole.asp)
 }
 
 // JViewerArgs holds all arguments needed to launch JViewer.

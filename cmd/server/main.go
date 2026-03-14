@@ -60,14 +60,6 @@ func main() {
 	// Create API server
 	srv := api.NewServer(cfg, cm)
 
-	// Start IPMI proxy listeners (one per server, zero content rewriting)
-	ipmiProxies, err := api.NewIPMIProxyManager(cfg)
-	if err != nil {
-		log.Fatalf("Failed to start IPMI proxies: %v", err)
-	}
-	defer ipmiProxies.Close()
-	srv.IPMIProxies = ipmiProxies
-
 	// Set up OIDC provider if enabled
 	var oidcProvider *kvmoidc.Provider
 	if cfg.OIDC.Enabled {
@@ -106,20 +98,23 @@ func main() {
 		apiMux.HandleFunc("GET /api/sessions", srv.ListSessions)
 		apiMux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		apiMux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
-		apiMux.HandleFunc("GET /api/ipmi-ports", srv.IPMIPorts)
+		apiMux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
 		apiMux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+		apiMux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
 
 		protected := oidcProvider.Middleware(apiMux)
 		mux.Handle("/api/", protected)
 		mux.Handle("/ws/", protected)
+		mux.Handle("/__bmc/", protected)
 	} else {
 		mux.HandleFunc("GET /api/servers", srv.ListServers)
 		mux.HandleFunc("POST /api/sessions", srv.CreateSession)
 		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
 		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
-		mux.HandleFunc("GET /api/ipmi-ports", srv.IPMIPorts)
+		mux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+		mux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
 	}
 
 	// Serve frontend static files
@@ -190,6 +185,12 @@ func spaHandler(fs http.Handler, dir string) http.Handler {
 		// Try to serve the file directly
 		path := dir + r.URL.Path
 		if _, err := os.Stat(path); err == nil {
+			// Service Worker script must never be cached by the browser
+			// so updates are detected immediately.
+			if r.URL.Path == "/sw.js" {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				w.Header().Set("Service-Worker-Allowed", "/")
+			}
 			fs.ServeHTTP(w, r)
 			return
 		}
