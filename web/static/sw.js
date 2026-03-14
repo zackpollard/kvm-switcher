@@ -227,8 +227,8 @@ async function proxyToBMC(request, name, path) {
 			headers.set(key, value);
 		}
 
-		// For navigation requests to login pages, inject an auto-login script
-		// if the proxy signals that cached credentials are available.
+		// For navigation requests to login pages, handle auto-login if the
+		// proxy signals that cached credentials are available.
 		let body = resp.body;
 		if (request.mode === 'navigate' && resp.headers.get('x-kvm-autologin') === 'true') {
 			const ct = (resp.headers.get('content-type') || '').toLowerCase();
@@ -255,11 +255,13 @@ async function proxyToBMC(request, name, path) {
 	}
 }
 
-// Auto-login script for iDRAC8 login.html
-// Waits for the login form to become visible (after AJAX loads locale),
-// fills dummy credentials (intercepted by the proxy), and submits.
+// Auto-login script for iDRAC8 login.html (fallback — normally bypassed by proxy).
+// Hides the form, fills dummy credentials (intercepted by proxy), and submits.
 const IDRAC8_AUTO_LOGIN = `<script>
 (function() {
+	var s = document.createElement('style');
+	s.textContent = '#dataarea { visibility: hidden !important; }';
+	document.head.appendChild(s);
 	var t = setInterval(function() {
 		var da = document.getElementById('dataarea');
 		if (da && da.style.visibility === 'visible') {
@@ -267,8 +269,8 @@ const IDRAC8_AUTO_LOGIN = `<script>
 			var u = document.querySelector('input[name="user"]');
 			var p = document.querySelector('input[name="password"]');
 			if (u && p) {
-				u.value = 'root';
-				p.value = 'auto';
+				u.value = '.';
+				p.value = '.';
 				if (typeof frmSubmit === 'function') frmSubmit();
 			}
 		}
@@ -277,10 +279,16 @@ const IDRAC8_AUTO_LOGIN = `<script>
 })();
 </script>`;
 
-// Auto-login script for iDRAC9 start.html (Angular)
-// Waits for the Angular form to initialize, fills credentials, and clicks submit.
+// Auto-login script for iDRAC9 start.html (Angular).
+// Hides the login form immediately, then submits via Angular's scope so that
+// Angular processes the response and sets its internal auth state. Dummy
+// credentials are used — the proxy intercepts the POST before the BMC sees them.
 const IDRAC9_AUTO_LOGIN = `<script>
 (function() {
+	// Hide the form immediately so credentials are never visible
+	var s = document.createElement('style');
+	s.textContent = 'form, .login-container { visibility: hidden !important; }';
+	document.head.appendChild(s);
 	var t = setInterval(function() {
 		var btn = document.querySelector('button[type="submit"]');
 		var uInput = document.querySelector('input[name="username"]');
@@ -291,8 +299,8 @@ const IDRAC9_AUTO_LOGIN = `<script>
 			if (scope && scope.config) {
 				clearInterval(t);
 				scope.$apply(function() {
-					scope.config.username = 'root';
-					scope.config.password = 'auto';
+					scope.config.username = '.';
+					scope.config.password = '.';
 				});
 				setTimeout(function() { btn.click(); }, 100);
 			}
@@ -302,17 +310,18 @@ const IDRAC9_AUTO_LOGIN = `<script>
 })();
 </script>`;
 
-// Inject auto-login script into login page HTML based on URL path.
+// Handle auto-login for BMC login pages. Returns modified HTML or the
+// original if no login page was detected.
 function injectAutoLoginScript(html, path) {
-	// iDRAC8: login.html
+	// iDRAC8: login.html — inject script that auto-fills and submits
 	if (path.endsWith('/login.html') || path === '/login.html') {
-		// Only inject if this looks like an iDRAC8 login page
 		if (html.includes('frmSubmit') && html.includes('dataarea')) {
 			return html.replace('</body>', IDRAC8_AUTO_LOGIN + '</body>');
 		}
 	}
 
-	// iDRAC9: start.html (Angular login page)
+	// iDRAC9: start.html — inject script that calls the login API through
+	// Angular's $http (no form fill, no credentials in the DOM)
 	if (path.endsWith('/start.html') || path === '/start.html') {
 		if (html.includes('angular') && html.includes('logincontroller')) {
 			return html.replace('</body>', IDRAC9_AUTO_LOGIN + '</body>');

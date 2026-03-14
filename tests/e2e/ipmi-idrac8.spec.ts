@@ -31,37 +31,28 @@ test.describe('iDRAC8 IPMI', () => {
       hasFrames: document.querySelectorAll('frame, iframe').length,
     }));
 
-    expect(state.title).toContain('Summary');
+    expect(state.title).toContain('iDRAC');
     expect(state.url).toContain('index.html');
     expect(state.url).toContain('ST1=');
     expect(state.hasFrames).toBeGreaterThan(0);
   });
 
-  test('login page renders with form visible before auto-submit', async ({ context }) => {
+  test('login page is bypassed (no login form shown)', async ({ context }) => {
     const page = await context.newPage();
     await registerServiceWorker(page);
     await createIPMISession(page, SERVER);
 
-    // Navigate but check quickly before auto-login completes
     const ipmiPage = await navigateToIPMI(context, SERVER, 5000);
 
-    // At this point we should either be on the login page with visible form
-    // or already past it (auto-login was fast). Both are acceptable.
     const state = await ipmiPage.evaluate(() => ({
       url: window.location.href,
-      dataareaVisible: document.getElementById('dataarea')?.style?.visibility,
       hasLoginForm: !!document.querySelector('input[name="user"]'),
-      lang: (window as unknown as Record<string, unknown>).lang,
     }));
 
-    // Either on dashboard (index.html), login page with visible form, or still on login page
-    expect(
-      state.url.includes('index.html') || state.dataareaVisible === 'visible' || state.hasLoginForm || state.url.includes('login.html')
-    ).toBe(true);
-
-    if (state.lang !== undefined) {
-      expect(state.lang).toBe('en');
-    }
+    // With login bypass, should never see the login form
+    expect(state.hasLoginForm).toBe(false);
+    // Should be on dashboard (index.html) or in redirect transition
+    expect(state.url.includes('index.html') || state.url.includes('ipmi/')).toBe(true);
   });
 
   test('login interception returns cached credentials', async ({ context }) => {

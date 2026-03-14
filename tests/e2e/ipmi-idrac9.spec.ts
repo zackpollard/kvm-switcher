@@ -22,7 +22,7 @@ test.describe('iDRAC9 IPMI', () => {
     expect(session.board_type).toBe('dell_idrac9');
     expect(session.session_cookie).toBeTruthy();
 
-    // Navigate and wait — auto-login should happen automatically
+    // Navigate and wait for auto-login + Angular dashboard to load
     const ipmiPage = await navigateToIPMI(context, SERVER, 30000);
 
     const state = await ipmiPage.evaluate(() => ({
@@ -36,27 +36,28 @@ test.describe('iDRAC9 IPMI', () => {
     expect(state.bodyText).toContain('Dashboard');
   });
 
-  test('login page loads with Angular form before auto-submit', async ({ context }) => {
+  test('login form is hidden during auto-login', async ({ context }) => {
     const page = await context.newPage();
     await registerServiceWorker(page);
     await createIPMISession(page, SERVER);
 
-    // Navigate but check quickly before auto-login completes
-    const ipmiPage = await navigateToIPMI(context, SERVER, 8000);
+    const ipmiPage = await navigateToIPMI(context, SERVER, 5000);
 
-    // At this point we should either be on the login page with Angular form
-    // or already past it (auto-login was fast). Both are acceptable.
-    const state = await ipmiPage.evaluate(() => ({
-      title: document.title,
-      url: window.location.href,
-      hasUsernameInput: !!document.querySelector('input[name="username"]'),
-      hasSubmitButton: !!document.querySelector('button[type="submit"]'),
-    }));
+    // The login form should be hidden by the injected CSS
+    const state = await ipmiPage.evaluate(() => {
+      const form = document.querySelector('form');
+      if (!form) return { hasForm: false };
+      const style = window.getComputedStyle(form);
+      return {
+        hasForm: true,
+        formVisible: style.visibility !== 'hidden',
+      };
+    });
 
-    // Either on dashboard or login page with Angular form
-    expect(
-      state.url.includes('restgui/index.html') || state.hasUsernameInput
-    ).toBe(true);
+    // If the form exists, it should be hidden
+    if (state.hasForm) {
+      expect(state.formVisible).toBe(false);
+    }
   });
 
   test('login interception returns cached session', async ({ context }) => {
@@ -87,7 +88,6 @@ test.describe('iDRAC9 IPMI', () => {
     await registerServiceWorker(page);
     await createIPMISession(page, SERVER);
 
-    // Navigate and wait for auto-login to complete
     const ipmiPage = await navigateToIPMI(context, SERVER, 30000);
 
     const dashboard = await ipmiPage.evaluate(() => ({
