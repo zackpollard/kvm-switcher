@@ -114,6 +114,27 @@ func (a *IDRAC9Authenticator) login(ctx context.Context, baseURL, username, pass
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		// HTTP 503 usually means session limit reached. Try clearing stale
+		// sessions via Redfish and retry once.
+		log.Printf("iDRAC9 %s: login returned 503 (session limit), clearing stale sessions...", baseURL)
+		a.clearStaleSessions(ctx, baseURL, username, password)
+
+		// Retry login
+		req2, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req2.Header.Set("user", fmt.Sprintf("%q", username))
+		req2.Header.Set("password", fmt.Sprintf("%q", password))
+		resp, err = idracHTTPClient.Do(req2)
+		if err != nil {
+			return nil, fmt.Errorf("sending login retry request: %w", err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+	}
+
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, fmt.Errorf("login returned HTTP %d", resp.StatusCode)
 	}
@@ -179,6 +200,47 @@ func (a *IDRAC9Authenticator) configureVNC(ctx context.Context, host string, por
 	}
 
 	return vncPassword, nil
+}
+
+// clearStaleSessions removes all GUI sessions via the Redfish API.
+// This is used when login fails with HTTP 503 (session limit reached).
+func (a *IDRAC9Authenticator) clearStaleSessions(ctx context.Context, baseURL, username, password string) {
+	sessURL := baseURL + "/redfish/v1/SessionService/Sessions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sessURL, nil)
+	if err != nil {
+		return
+	}
+	req.SetBasicAuth(username, password)
+
+	resp, err := idracHTTPClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Members []struct {
+			ODataID string `json:"@odata.id"`
+		} `json:"Members"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	for _, m := range result.Members {
+		delURL := baseURL + m.ODataID
+		delReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, delURL, nil)
+		if err != nil {
+			continue
+		}
+		delReq.SetBasicAuth(username, password)
+		delResp, err := idracHTTPClient.Do(delReq)
+		if err != nil {
+			continue
+		}
+		delResp.Body.Close()
+		log.Printf("iDRAC9: cleared session %s (HTTP %d)", m.ODataID, delResp.StatusCode)
+	}
 }
 
 func (a *IDRAC9Authenticator) logoutSession(ctx context.Context, baseURL string, sess *idrac9Session) error {
@@ -313,9 +375,12 @@ func (a *IDRAC8Authenticator) login(ctx context.Context, baseURL, username, pass
 	// Parse XML response to extract authResult and forwardUrl with ST1/ST2.
 	// Response format: <root>...<authResult>0</authResult><forwardUrl>index.html?ST1=abc,ST2=def</forwardUrl></root>
 	// Note: ST1 and ST2 are comma-separated in the forwardUrl, not &-separated.
-	authResult, forwardURL := parseIDRAC8LoginResponse(string(body))
+	authResult, forwardURL, errorMsg := parseIDRAC8LoginResponse(string(body))
 
 	if authResult != "0" {
+		if errorMsg != "" {
+			return nil, fmt.Errorf("login failed: authResult=%s (%s)", authResult, errorMsg)
+		}
 		return nil, fmt.Errorf("login failed: authResult=%s", authResult)
 	}
 
@@ -338,17 +403,18 @@ func (a *IDRAC8Authenticator) login(ctx context.Context, baseURL, username, pass
 	return sess, nil
 }
 
-// parseIDRAC8LoginResponse extracts authResult and forwardUrl from iDRAC8's XML response.
-func parseIDRAC8LoginResponse(body string) (authResult, forwardURL string) {
+// parseIDRAC8LoginResponse extracts authResult, forwardUrl, and errorMsg from iDRAC8's XML response.
+func parseIDRAC8LoginResponse(body string) (authResult, forwardURL, errorMsg string) {
 	// Try XML parsing first (root element is <root>)
 	type loginResp struct {
 		XMLName    xml.Name `xml:"root"`
 		AuthResult string   `xml:"authResult"`
 		ForwardURL string   `xml:"forwardUrl"`
+		ErrorMsg   string   `xml:"errorMsg"`
 	}
 	var xmlResp loginResp
 	if err := xml.Unmarshal([]byte(body), &xmlResp); err == nil {
-		return xmlResp.AuthResult, xmlResp.ForwardURL
+		return xmlResp.AuthResult, xmlResp.ForwardURL, xmlResp.ErrorMsg
 	}
 
 	// Fallback to regex
@@ -359,6 +425,10 @@ func parseIDRAC8LoginResponse(body string) (authResult, forwardURL string) {
 	fwdRe := regexp.MustCompile(`<forwardUrl>([^<]+)</forwardUrl>`)
 	if m := fwdRe.FindStringSubmatch(body); m != nil {
 		forwardURL = m[1]
+	}
+	errRe := regexp.MustCompile(`<errorMsg>([^<]+)</errorMsg>`)
+	if m := errRe.FindStringSubmatch(body); m != nil {
+		errorMsg = m[1]
 	}
 	return
 }

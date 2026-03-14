@@ -113,6 +113,12 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			req.URL.Host = target.Host
 			req.Host = target.Host
 
+			// Some BMCs (iDRAC9) require Accept-Encoding to serve static files.
+			// Ensure it's always set so CSS/JS/images load correctly.
+			if req.Header.Get("Accept-Encoding") == "" {
+				req.Header.Set("Accept-Encoding", "gzip, deflate")
+			}
+
 			// Strip our auth cookies and browser-side BMC cookies
 			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie", "-http-session-")
 
@@ -135,6 +141,15 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			// Rewrite Location header so redirects stay through the proxy
 			if loc := resp.Header.Get("Location"); loc != "" {
 				resp.Header.Set("Location", rewriteLocationForBMC(loc, bmcOrigin, name))
+			}
+
+			// iDRAC8 serves gzip-compressed content with Content-Type: application/x-gzip
+			// instead of using Content-Encoding: gzip properly. Browsers treat this as a
+			// file download rather than rendering it. Fix the headers so browsers decompress
+			// and render the content correctly.
+			if resp.Header.Get("Content-Type") == "application/x-gzip" {
+				resp.Header.Set("Content-Type", "text/html")
+				resp.Header.Set("Content-Encoding", "gzip")
 			}
 
 			// Remove headers that block framing/embedding
