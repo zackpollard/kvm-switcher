@@ -239,6 +239,12 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 				resp.Header.Set("X_Language", "en")
 			}
 
+			// Signal to the service worker that auto-login is available.
+			// The SW uses this to inject auto-submit scripts into login pages.
+			if entry.getBMCCredentials() != nil {
+				resp.Header.Set("X-KVM-AutoLogin", "true")
+			}
+
 			// Remove headers that block framing/embedding
 			resp.Header.Del("Content-Security-Policy")
 			resp.Header.Del("X-Frame-Options")
