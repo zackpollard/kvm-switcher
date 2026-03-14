@@ -73,6 +73,13 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	// Get or create cached proxy
 	entry := getOrCreateProxy(serverCfg, name)
 
+	// Intercept login requests and return cached credentials instead of
+	// creating a new BMC session. This prevents session buildup and
+	// provides auto-login functionality.
+	if handled := handleLoginIntercept(w, r, remainder, entry); handled {
+		return
+	}
+
 	// Rewrite the request path to the remainder
 	r.URL.Path = remainder
 	if r.URL.RawPath != "" {
@@ -80,6 +87,69 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry.proxy.ServeHTTP(w, r)
+}
+
+// handleLoginIntercept checks if the request is a BMC login and returns cached
+// credentials instead of forwarding to the BMC. Returns true if handled.
+func handleLoginIntercept(w http.ResponseWriter, r *http.Request, path string, entry *bmcProxyEntry) bool {
+	creds := entry.getBMCCredentials()
+	if creds == nil {
+		return false
+	}
+
+	switch entry.boardType {
+	case "dell_idrac9":
+		// iDRAC9 login: POST /sysmgmt/2015/bmc/session
+		if r.Method == http.MethodPost && path == "/sysmgmt/2015/bmc/session" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("XSRF-TOKEN", creds.CSRFToken)
+			http.SetCookie(w, &http.Cookie{
+				Name:     "-http-session-",
+				Value:    creds.SessionCookie,
+				Path:     "/",
+				Secure:   true,
+				HttpOnly: true,
+			})
+			w.WriteHeader(http.StatusCreated)
+			fmt.Fprint(w, `{"authResult":0}`)
+			log.Printf("BMC proxy: intercepted iDRAC9 login, returning cached session")
+			return true
+		}
+
+	case "dell_idrac8":
+		// iDRAC8 pre-login logout: the login page POSTs to /data/logout
+		// before submitting credentials (session fixation prevention).
+		// Intercept this to prevent it from invalidating our managed session.
+		if r.Method == http.MethodPost && path == "/data/logout" {
+			w.Header().Set("Content-Type", "text/xml")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><root><status>ok</status></root>`)
+			log.Printf("BMC proxy: intercepted iDRAC8 pre-login logout, returning fake OK")
+			return true
+		}
+
+		// iDRAC8 login: POST /data/login
+		if r.Method == http.MethodPost && path == "/data/login" {
+			st1 := ""
+			if creds.Extra != nil {
+				st1 = creds.Extra["st1"]
+			}
+			w.Header().Set("Content-Type", "text/xml")
+			http.SetCookie(w, &http.Cookie{
+				Name:     "-http-session-",
+				Value:    creds.SessionCookie,
+				Path:     "/",
+				Secure:   true,
+				HttpOnly: true,
+			})
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?> <root> <status>ok</status> <authResult>0</authResult> <forwardUrl>index.html?ST1=%s,ST2=%s</forwardUrl> </root>`, st1, creds.CSRFToken)
+			log.Printf("BMC proxy: intercepted iDRAC8 login, returning cached session")
+			return true
+		}
+	}
+
+	return false
 }
 
 // bmcScheme returns the URL scheme for a given board type.
@@ -148,8 +218,25 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			// file download rather than rendering it. Fix the headers so browsers decompress
 			// and render the content correctly.
 			if resp.Header.Get("Content-Type") == "application/x-gzip" {
-				resp.Header.Set("Content-Type", "text/html")
+				// Infer correct Content-Type from the request URL extension
+				ct := inferContentType(resp.Request.URL.Path)
+				resp.Header.Set("Content-Type", ct)
 				resp.Header.Set("Content-Encoding", "gzip")
+			}
+
+			// iDRAC8 serves .jsesp (embedded JS) files as text/html. Chrome's strict
+			// MIME type checking blocks script execution for non-JS Content-Types.
+			if strings.HasSuffix(resp.Request.URL.Path, ".jsesp") {
+				resp.Header.Set("Content-Type", "application/javascript")
+			}
+
+			// iDRAC8 firmware omits the X_Language header on /session API
+			// responses. The login page JS reads this header to determine the
+			// locale and silently fails (null.substring throws in a try/catch),
+			// preventing loadLocale() from ever being called and leaving the
+			// login form hidden. Inject the header so the page renders.
+			if serverCfg.BoardType == "dell_idrac8" && resp.Header.Get("X_Language") == "" {
+				resp.Header.Set("X_Language", "en")
 			}
 
 			// Remove headers that block framing/embedding
@@ -182,16 +269,13 @@ func injectBMCCredentials(req *http.Request, boardType string, creds *models.BMC
 		}
 
 	case "dell_idrac8":
-		// iDRAC8: -http-session- cookie + ST2 header
+		// iDRAC8: -http-session- cookie + ST2 header.
+		// ST1 is NOT injected here — it's a URL parameter managed by the
+		// browser-side JS after login. Injecting it server-side corrupts
+		// query strings on unauthenticated API calls.
 		req.AddCookie(&http.Cookie{Name: "-http-session-", Value: creds.SessionCookie})
 		if creds.CSRFToken != "" {
 			req.Header.Set("ST2", creds.CSRFToken)
-		}
-		// Inject ST1 as URL parameter
-		if creds.Extra != nil && creds.Extra["st1"] != "" {
-			q := req.URL.Query()
-			q.Set("ST1", creds.Extra["st1"])
-			req.URL.RawQuery = q.Encode()
 		}
 
 	default:
@@ -228,6 +312,33 @@ func rewriteLocationForBMC(loc, bmcOrigin, name string) string {
 	}
 
 	return loc
+}
+
+// inferContentType returns a MIME type based on the URL path extension.
+// Used when the BMC sends a generic Content-Type like application/x-gzip.
+func inferContentType(path string) string {
+	switch {
+	case strings.HasSuffix(path, ".html"), strings.HasSuffix(path, ".htm"):
+		return "text/html"
+	case strings.HasSuffix(path, ".js"), strings.HasSuffix(path, ".jsesp"):
+		return "application/javascript"
+	case strings.HasSuffix(path, ".css"):
+		return "text/css"
+	case strings.HasSuffix(path, ".json"):
+		return "application/json"
+	case strings.HasSuffix(path, ".png"):
+		return "image/png"
+	case strings.HasSuffix(path, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(path, ".jpg"), strings.HasSuffix(path, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(path, ".svg"):
+		return "image/svg+xml"
+	case strings.HasSuffix(path, ".xml"):
+		return "text/xml"
+	default:
+		return "text/html"
+	}
 }
 
 // filterCookies removes named cookies from the outgoing request.

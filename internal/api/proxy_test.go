@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -239,6 +240,322 @@ func TestHandleBMCProxy_BMCCredentialInjection(t *testing.T) {
 	}
 	if result["csrf_token"] != "test-csrf-456" {
 		t.Errorf("X-CSRFTOKEN = %q, want %q", result["csrf_token"], "test-csrf-456")
+	}
+}
+
+// --- Dell iDRAC tests ---
+
+func newDellIDRAC8BMC(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/start.html", http.StatusFound)
+	})
+
+	mux.HandleFunc("GET /session", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Note: no X_Language header (firmware bug)
+		fmt.Fprint(w, `{"aimGetIntProp":{"scl_int_enabled":0,"status":"OK"}}`)
+	})
+
+	mux.HandleFunc("POST /data/login", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		fmt.Fprint(w, `<?xml version="1.0"?><root><status>ok</status><authResult>0</authResult><forwardUrl>index.html?ST1=a,ST2=b</forwardUrl></root>`)
+	})
+
+	mux.HandleFunc("POST /data/logout", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		fmt.Fprint(w, `<?xml version="1.0"?><root><status>ok</status></root>`)
+	})
+
+	return httptest.NewTLSServer(mux)
+}
+
+func newDellIDRAC9BMC(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>iDRAC9</body></html>`)
+	})
+
+	mux.HandleFunc("POST /sysmgmt/2015/bmc/session", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("XSRF-TOKEN", "real-csrf")
+		http.SetCookie(w, &http.Cookie{Name: "-http-session-", Value: "real-session"})
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"authResult":0}`)
+	})
+
+	return httptest.NewTLSServer(mux)
+}
+
+func newTestDellServer(t *testing.T, bmc *httptest.Server, boardType string) *Server {
+	t.Helper()
+	// Parse URL to handle both http:// and https:// schemes
+	u, err := url.Parse(bmc.URL)
+	if err != nil {
+		t.Fatalf("failed to parse BMC URL: %v", err)
+	}
+	host := u.Hostname()
+	port := 443
+	if p := u.Port(); p != "" {
+		fmt.Sscanf(p, "%d", &port)
+	}
+
+	name := "test-dell"
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: name, BMCIP: host, BMCPort: port, BoardType: boardType, Username: "root", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+
+	bmcProxies.Delete(name)
+	return NewServer(cfg, &mockContainerManager{})
+}
+
+func TestHandleBMCProxy_IDRAC8_XLanguageInjection(t *testing.T) {
+	bmc := newDellIDRAC8BMC(t)
+	defer bmc.Close()
+	srv := newTestDellServer(t, bmc, "dell_idrac8")
+
+	req := httptest.NewRequest("GET", "/__bmc/test-dell/session?aimGetIntProp=scl_int_enabled", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	xlang := w.Header().Get("X_Language")
+	if xlang != "en" {
+		t.Errorf("X_Language = %q, want %q", xlang, "en")
+	}
+}
+
+func TestHandleBMCProxy_IDRAC8_LoginIntercept(t *testing.T) {
+	bmc := newDellIDRAC8BMC(t)
+	defer bmc.Close()
+	srv := newTestDellServer(t, bmc, "dell_idrac8")
+
+	// Inject cached credentials
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-dell")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "cached-session",
+		CSRFToken:     "cached-csrf",
+		Extra:         map[string]string{"st1": "cached-st1"},
+	})
+
+	req := httptest.NewRequest("POST", "/__bmc/test-dell/data/login", strings.NewReader("user=root&password=test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "<authResult>0</authResult>") {
+		t.Errorf("body should contain authResult 0, got: %s", body)
+	}
+	if !strings.Contains(body, "ST1=cached-st1") {
+		t.Errorf("body should contain cached ST1, got: %s", body)
+	}
+	if !strings.Contains(body, "ST2=cached-csrf") {
+		t.Errorf("body should contain cached ST2 (CSRF), got: %s", body)
+	}
+
+	// Verify session cookie is set
+	cookies := w.Result().Cookies()
+	found := false
+	for _, c := range cookies {
+		if c.Name == "-http-session-" && c.Value == "cached-session" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected -http-session- cookie with cached value")
+	}
+}
+
+func TestHandleBMCProxy_IDRAC8_LogoutIntercept(t *testing.T) {
+	bmc := newDellIDRAC8BMC(t)
+	defer bmc.Close()
+	srv := newTestDellServer(t, bmc, "dell_idrac8")
+
+	// Inject cached credentials
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-dell")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "cached-session",
+		CSRFToken:     "cached-csrf",
+	})
+
+	// The login page POSTs to /data/logout before login — this should be intercepted
+	req := httptest.NewRequest("POST", "/__bmc/test-dell/data/logout", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "<status>ok</status>") {
+		t.Errorf("body should contain fake OK, got: %s", body)
+	}
+
+	// Credentials should still be cached (not invalidated)
+	if creds := entry.getBMCCredentials(); creds == nil || creds.SessionCookie != "cached-session" {
+		t.Error("credentials should still be cached after intercepted logout")
+	}
+}
+
+func TestHandleBMCProxy_IDRAC9_LoginIntercept(t *testing.T) {
+	bmc := newDellIDRAC9BMC(t)
+	defer bmc.Close()
+	srv := newTestDellServer(t, bmc, "dell_idrac9")
+
+	// Inject cached credentials
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-dell")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "idrac9-session",
+		CSRFToken:     "idrac9-csrf",
+	})
+
+	req := httptest.NewRequest("POST", "/__bmc/test-dell/sysmgmt/2015/bmc/session", strings.NewReader(`{"UserName":"root","Password":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", w.Code)
+	}
+
+	body := w.Body.String()
+	if body != `{"authResult":0}` {
+		t.Errorf("unexpected body: %s", body)
+	}
+
+	// Check XSRF-TOKEN header
+	xsrf := w.Header().Get("XSRF-TOKEN")
+	if xsrf != "idrac9-csrf" {
+		t.Errorf("XSRF-TOKEN = %q, want %q", xsrf, "idrac9-csrf")
+	}
+
+	// Check session cookie
+	cookies := w.Result().Cookies()
+	found := false
+	for _, c := range cookies {
+		if c.Name == "-http-session-" && c.Value == "idrac9-session" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected -http-session- cookie with cached value")
+	}
+}
+
+func TestHandleBMCProxy_IDRAC9_NoInterceptWithoutCreds(t *testing.T) {
+	bmc := newDellIDRAC9BMC(t)
+	defer bmc.Close()
+	srv := newTestDellServer(t, bmc, "dell_idrac9")
+
+	// No cached credentials — login should pass through to real BMC
+	req := httptest.NewRequest("POST", "/__bmc/test-dell/sysmgmt/2015/bmc/session", strings.NewReader(`{"UserName":"root","Password":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	// Should get the real BMC response (201)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 from real BMC", w.Code)
+	}
+
+	// XSRF-TOKEN should be from the real BMC
+	xsrf := w.Header().Get("XSRF-TOKEN")
+	if xsrf != "real-csrf" {
+		t.Errorf("XSRF-TOKEN = %q, want %q (from real BMC)", xsrf, "real-csrf")
+	}
+}
+
+func TestHandleBMCProxy_IDRAC8_CredentialInjection(t *testing.T) {
+	// Create a BMC that echoes back received auth headers
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		sessionCookie := ""
+		for _, c := range r.Cookies() {
+			if c.Name == "-http-session-" {
+				sessionCookie = c.Value
+			}
+		}
+		st2 := r.Header.Get("ST2")
+		fmt.Fprintf(w, `{"session_cookie":%q,"st2":%q}`, sessionCookie, st2)
+	})
+	bmc := httptest.NewTLSServer(mux)
+	defer bmc.Close()
+
+	srv := newTestDellServer(t, bmc, "dell_idrac8")
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-dell")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "idrac8-session-abc",
+		CSRFToken:     "idrac8-st2-xyz",
+	})
+
+	req := httptest.NewRequest("GET", "/__bmc/test-dell/api/check", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result["session_cookie"] != "idrac8-session-abc" {
+		t.Errorf("session_cookie = %q, want %q", result["session_cookie"], "idrac8-session-abc")
+	}
+	if result["st2"] != "idrac8-st2-xyz" {
+		t.Errorf("st2 = %q, want %q", result["st2"], "idrac8-st2-xyz")
+	}
+}
+
+func TestHandleBMCProxy_IDRAC9_CredentialInjection(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		sessionCookie := ""
+		for _, c := range r.Cookies() {
+			if c.Name == "-http-session-" {
+				sessionCookie = c.Value
+			}
+		}
+		xsrf := r.Header.Get("XSRF-TOKEN")
+		fmt.Fprintf(w, `{"session_cookie":%q,"xsrf":%q}`, sessionCookie, xsrf)
+	})
+	bmc := httptest.NewTLSServer(mux)
+	defer bmc.Close()
+
+	srv := newTestDellServer(t, bmc, "dell_idrac9")
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-dell")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "idrac9-session-abc",
+		CSRFToken:     "idrac9-xsrf-xyz",
+	})
+
+	req := httptest.NewRequest("GET", "/__bmc/test-dell/api/check", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result["session_cookie"] != "idrac9-session-abc" {
+		t.Errorf("session_cookie = %q, want %q", result["session_cookie"], "idrac9-session-abc")
+	}
+	if result["xsrf"] != "idrac9-xsrf-xyz" {
+		t.Errorf("xsrf = %q, want %q", result["xsrf"], "idrac9-xsrf-xyz")
 	}
 }
 
