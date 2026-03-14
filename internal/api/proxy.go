@@ -77,9 +77,17 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	// Get or create cached proxy
 	entry := getOrCreateProxy(serverCfg, name)
 
-	// Intercept login requests and return cached credentials instead of
-	// creating a new BMC session. This prevents session buildup and
-	// provides auto-login functionality.
+	// If we have cached credentials, bypass the login page entirely by
+	// redirecting straight to the dashboard. This avoids exposing any
+	// credentials (even dummy ones) to the client.
+	if handled := handleLoginPageBypass(w, r, remainder, entry); handled {
+		return
+	}
+
+	// Intercept login POST requests and return cached credentials instead
+	// of creating a new BMC session. This is a safety net for cases where
+	// the login page is reached despite the bypass above (e.g., session
+	// timeout re-auth within the dashboard).
 	if handled := handleLoginIntercept(w, r, remainder, entry); handled {
 		return
 	}
@@ -91,6 +99,42 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry.proxy.ServeHTTP(w, r)
+}
+
+// handleLoginPageBypass redirects login/landing pages directly to the dashboard
+// when cached BMC credentials exist. This completely skips the login form, so no
+// credentials (real or dummy) are ever exposed to the browser.
+func handleLoginPageBypass(w http.ResponseWriter, r *http.Request, path string, entry *bmcProxyEntry) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	creds := entry.getBMCCredentials()
+	if creds == nil {
+		return false
+	}
+
+	switch entry.boardType {
+	case "dell_idrac9":
+		// iDRAC9's Angular SPA requires the login API call to set client-side
+		// state, so we can't skip directly to the dashboard. Instead, the SW
+		// replaces the login page with a synthetic page that calls the login
+		// API (intercepted by the proxy) and redirects to the dashboard.
+		// No bypass needed here — handled entirely in the service worker.
+
+	case "dell_idrac8":
+		if path == "/" || path == "/start.html" || path == "/login.html" {
+			st1 := ""
+			if creds.Extra != nil {
+				st1 = creds.Extra["st1"]
+			}
+			redirectURL := fmt.Sprintf("index.html?ST1=%s,ST2=%s", st1, creds.CSRFToken)
+			http.Redirect(w, r, redirectURL, http.StatusFound)
+			log.Printf("BMC proxy: bypassing iDRAC8 login, redirecting to dashboard")
+			return true
+		}
+	}
+
+	return false
 }
 
 // handleLoginIntercept checks if the request is a BMC login and returns cached
