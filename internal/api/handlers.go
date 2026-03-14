@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"net/url"
 	"time"
 
@@ -23,20 +24,26 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	Config    *models.AppConfig
-	Sessions  *models.SessionStore
-	Container containermgr.Manager
-	BMCCreds  map[string]*models.BMCCredentials // session ID -> BMC creds for logout
+	Config      *models.AppConfig
+	Sessions    *models.SessionStore
+	Container   containermgr.Manager
+	BMCCreds    map[string]*models.BMCCredentials // session ID -> BMC creds for logout
+	StatusCache *StatusCache
 }
 
 // NewServer creates a new API server.
 func NewServer(cfg *models.AppConfig, cm containermgr.Manager) *Server {
-	return &Server{
-		Config:    cfg,
-		Sessions:  models.NewSessionStore(),
-		Container: cm,
-		BMCCreds:  make(map[string]*models.BMCCredentials),
+	sc := NewStatusCache()
+	srv := &Server{
+		Config:      cfg,
+		Sessions:    models.NewSessionStore(),
+		Container:   cm,
+		BMCCreds:    make(map[string]*models.BMCCredentials),
+		StatusCache: sc,
 	}
+	StartSessionManager(cfg.Servers, sc)
+	StartStatusPoller(cfg.Servers, sc)
+	return srv
 }
 
 // ServerInfo is the JSON response for a server listing.
@@ -330,6 +337,12 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
+// GetServerStatuses returns cached status for all devices.
+func (s *Server) GetServerStatuses(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.StatusCache.GetAll())
+}
+
 // CreateIPMISession handles POST /api/ipmi-session/{name}.
 // Pre-authenticates with the BMC so the IPMI web UI loads directly to the dashboard.
 func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
@@ -355,40 +368,12 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	password, err := config.GetPassword(serverCfg)
+	creds, err := ensureBMCSession(serverCfg)
 	if err != nil {
-		log.Printf("IPMI session for %s: failed to get password: %v", name, err)
-		writeError(w, http.StatusInternalServerError, "BMC password not configured")
-		return
-	}
-
-	authenticator, ok := auth.Get(serverCfg.BoardType)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "unsupported board type")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	// Log out any existing BMC session before creating a new one to
-	// prevent session buildup (iDRACs have low session limits).
-	entry := getOrCreateProxy(serverCfg, name)
-	if oldCreds := entry.getBMCCredentials(); oldCreds != nil {
-		_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, oldCreds)
-		entry.setBMCCredentials(nil)
-	}
-
-	creds, err := authenticator.CreateWebSession(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
-	if err != nil {
-		log.Printf("IPMI session for %s: auth failed: %v", name, err)
+		log.Printf("IPMI session for %s: %v", name, err)
 		writeError(w, http.StatusBadGateway, "BMC authentication failed")
 		return
 	}
-
-	// Inject credentials into the BMC proxy so all proxied requests
-	// carry the session cookie and CSRF token automatically.
-	entry.setBMCCredentials(creds)
 
 	log.Printf("IPMI session for %s: authenticated, credentials injected into proxy", name)
 
@@ -400,6 +385,85 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 		"privilege":      creds.Privilege,
 		"extended_priv":  creds.ExtendedPriv,
 	})
+}
+
+// ensureBMCSession creates or renews a BMC web session for the given server.
+// Returns the credentials, or an error if authentication fails.
+func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) {
+	password, err := config.GetPassword(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("password not configured: %w", err)
+	}
+
+	authenticator, ok := auth.Get(cfg.BoardType)
+	if !ok {
+		return nil, fmt.Errorf("unsupported board type: %s", cfg.BoardType)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	entry := getOrCreateProxy(cfg, cfg.Name)
+
+	// Log out any existing session to prevent session buildup
+	if oldCreds := entry.getBMCCredentials(); oldCreds != nil {
+		_ = authenticator.Logout(ctx, cfg.BMCIP, cfg.BMCPort, oldCreds)
+		entry.setBMCCredentials(nil)
+	}
+
+	creds, err := authenticator.CreateWebSession(ctx, cfg.BMCIP, cfg.BMCPort, cfg.Username, password)
+	if err != nil {
+		return nil, err
+	}
+
+	entry.setBMCCredentials(creds)
+	return creds, nil
+}
+
+// StartSessionManager creates BMC web sessions for all servers on startup
+// and renews them periodically in the background.
+func StartSessionManager(servers []models.ServerConfig, sc *StatusCache) {
+	createAll := func(sc *StatusCache) {
+		var wg sync.WaitGroup
+		for i := range servers {
+			wg.Add(1)
+			go func(cfg *models.ServerConfig) {
+				defer wg.Done()
+				entry := getOrCreateProxy(cfg, cfg.Name)
+				if creds := entry.getBMCCredentials(); creds != nil {
+					// iDRAC8 uses Basic Auth for status — doesn't need web sessions.
+					// For other types, check if the status poller got data.
+					// If the device is online but has no power_state, the session is stale.
+					if cfg.BoardType == "dell_idrac8" {
+						return
+					}
+					if sc != nil {
+						if st, ok := sc.Get(cfg.Name); ok && st.Online && st.PowerState != "" {
+							return // session is working
+						}
+					}
+				}
+				if _, err := ensureBMCSession(cfg); err != nil {
+					log.Printf("Session for %s: %v", cfg.Name, err)
+				} else {
+					log.Printf("Session for %s: authenticated", cfg.Name)
+				}
+			}(&servers[i])
+		}
+		wg.Wait()
+	}
+
+	go func() {
+		log.Printf("Session manager: creating initial sessions for %d servers", len(servers))
+		createAll(nil)
+
+		// Check for stale/missing sessions every 2 minutes
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			createAll(sc)
+		}
+	}()
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

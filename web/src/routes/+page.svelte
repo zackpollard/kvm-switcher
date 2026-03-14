@@ -1,12 +1,48 @@
 <script lang="ts">
-	import { fetchServers, createSession, createIPMISession, type ServerInfo, type KVMSession } from '$lib/api';
+	import { fetchServers, createSession, createIPMISession, fetchServerStatuses, type ServerInfo, type DeviceStatus } from '$lib/api';
 	import { goto } from '$app/navigation';
 
 	let servers: ServerInfo[] = $state([]);
+	let statuses: Record<string, DeviceStatus> = $state({});
 	let loading = $state(true);
 	let error = $state('');
 	let connecting = $state<string | null>(null);
 	let openingIPMI = $state<string | null>(null);
+
+	const TYPE_LABELS: Record<string, string> = {
+		ami_megarac: 'Servers',
+		dell_idrac8: 'Servers',
+		dell_idrac9: 'Servers',
+		apc_ups: 'Power',
+	};
+
+	const TYPE_ORDER = ['Servers', 'Power'];
+
+	function groupedServers() {
+		const groups: Record<string, ServerInfo[]> = {};
+		for (const s of servers) {
+			const group = TYPE_LABELS[s.board_type] || 'Other';
+			(groups[group] ??= []).push(s);
+		}
+		return TYPE_ORDER.filter((g) => groups[g]).map((g) => ({ label: g, servers: groups[g] }));
+	}
+
+	function boardLabel(bt: string): string {
+		const labels: Record<string, string> = {
+			ami_megarac: 'MegaRAC',
+			dell_idrac8: 'iDRAC8',
+			dell_idrac9: 'iDRAC9',
+			apc_ups: 'APC NMC',
+		};
+		return labels[bt] || bt;
+	}
+
+	function healthColor(h?: string): string {
+		if (h === 'ok' || h === 'OK') return 'text-green-400';
+		if (h === 'warning' || h === 'Warning') return 'text-yellow-400';
+		if (h === 'critical' || h === 'Critical') return 'text-red-400';
+		return 'text-gray-500';
+	}
 
 	async function loadServers() {
 		try {
@@ -26,6 +62,14 @@
 		}
 	}
 
+	async function loadStatuses() {
+		try {
+			statuses = await fetchServerStatuses();
+		} catch {
+			// Silently fail — statuses are supplementary
+		}
+	}
+
 	async function openIPMI(serverName: string) {
 		try {
 			openingIPMI = serverName;
@@ -33,7 +77,6 @@
 			const session = await createIPMISession(serverName);
 
 			if (session.board_type === 'ami_megarac') {
-				// AMI MegaRAC: set cookies the BMC client-side JS expects
 				document.cookie = `SessionCookie=${session.session_cookie};path=/`;
 				document.cookie = `CSRFTOKEN=${session.csrf_token};path=/`;
 				document.cookie = `Username=${session.username};path=/`;
@@ -42,8 +85,6 @@
 				document.cookie = `settings={};path=/`;
 				document.cookie = 'SessionExpired=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
 			}
-			// Dell iDRAC: auth is handled entirely server-side by the proxy,
-			// no browser cookies needed.
 
 			window.open(`/ipmi/${serverName}/`, '_blank');
 		} catch (e) {
@@ -67,19 +108,24 @@
 
 	$effect(() => {
 		loadServers();
-		const interval = setInterval(loadServers, 10000);
-		return () => clearInterval(interval);
+		loadStatuses();
+		const serverInterval = setInterval(loadServers, 10000);
+		const statusInterval = setInterval(loadStatuses, 30000);
+		return () => {
+			clearInterval(serverInterval);
+			clearInterval(statusInterval);
+		};
 	});
 </script>
 
 <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
 	<div class="mb-8 flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold text-white">Servers</h1>
-			<p class="mt-1 text-sm text-gray-400">Select a server to open a KVM console session.</p>
+			<h1 class="text-2xl font-bold text-white">Infrastructure</h1>
+			<p class="mt-1 text-sm text-gray-400">Manage servers, KVM consoles, and power devices.</p>
 		</div>
 		<button
-			onclick={loadServers}
+			onclick={() => { loadServers(); loadStatuses(); }}
 			class="rounded-md bg-gray-800 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
 		>
 			Refresh
@@ -95,67 +141,144 @@
 	{#if loading && servers.length === 0}
 		<div class="flex items-center justify-center py-20">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400"></div>
-			<span class="ml-3 text-gray-400">Loading servers...</span>
+			<span class="ml-3 text-gray-400">Loading...</span>
 		</div>
 	{:else if servers.length === 0}
 		<div class="rounded-lg border border-gray-800 bg-gray-900 py-16 text-center">
-			<p class="text-gray-400">No servers configured.</p>
+			<p class="text-gray-400">No devices configured.</p>
 			<p class="mt-1 text-sm text-gray-500">Add servers to configs/servers.yaml</p>
 		</div>
 	{:else}
-		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-			{#each servers as server}
-				<div class="rounded-lg border border-gray-800 bg-gray-900 p-5 transition-colors hover:border-gray-700">
-					<div class="mb-4 flex items-start justify-between">
-						<div>
-							<h2 class="text-lg font-semibold text-white">{server.name}</h2>
-							<p class="mt-0.5 font-mono text-sm text-gray-400">{server.bmc_ip}:{server.bmc_port}</p>
-						</div>
-						<span class="rounded-full bg-gray-800 px-2.5 py-0.5 text-xs text-gray-400">
-							{server.board_type}
-						</span>
-					</div>
+		{#each groupedServers() as group}
+			<div class="mb-8">
+				<h2 class="mb-4 text-lg font-semibold text-gray-300">{group.label}</h2>
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+					{#each group.servers as server}
+						{@const st = statuses[server.name]}
+						<div class="rounded-lg border border-gray-800 bg-gray-900 p-5 transition-colors hover:border-gray-700">
+							<!-- Header -->
+							<div class="mb-3 flex items-start justify-between">
+								<div class="flex items-center gap-2">
+									{#if st}
+										<span class="h-2.5 w-2.5 rounded-full {st.online ? 'bg-green-400' : 'bg-red-500'}" title="{st.online ? 'Online' : 'Offline'}"></span>
+									{:else}
+										<span class="h-2.5 w-2.5 rounded-full bg-gray-600" title="Unknown"></span>
+									{/if}
+									<h3 class="text-lg font-semibold text-white">{server.name} <span class="text-sm font-normal text-gray-500">({server.bmc_ip})</span></h3>
+								</div>
+								<span class="rounded-full bg-gray-800 px-2.5 py-0.5 text-xs text-gray-400">
+									{boardLabel(server.board_type)}
+								</span>
+							</div>
 
-					<div class="flex items-center justify-between">
-						{#if server.has_active_session}
-							<span class="flex items-center gap-1.5 text-sm text-green-400">
-								<span class="h-2 w-2 rounded-full bg-green-400"></span>
-								Active session
-							</span>
-						{:else}
-							<span class="flex items-center gap-1.5 text-sm text-gray-500">
-								<span class="h-2 w-2 rounded-full bg-gray-600"></span>
-								No session
-							</span>
-						{/if}
+							<!-- Stats -->
+							<div class="mb-3 space-y-1 text-sm">
+								{#if st?.model}
+									<p class="text-gray-300">{st.model}</p>
+								{/if}
+								{#if server.board_type !== 'apc_ups'}
+									<!-- Server stats -->
+									{#if st?.power_state}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Power:</span>
+											<span class={st.power_state === 'on' ? 'text-green-400' : 'text-red-400'}>
+												{st.power_state === 'on' ? 'On' : 'Off'}
+											</span>
+											{#if st.load_watts}
+												<span class="text-gray-500">({st.load_watts}W)</span>
+											{/if}
+										</div>
+									{/if}
+									{#if st?.health}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Health:</span>
+											<span class={healthColor(st.health)}>{st.health}</span>
+										</div>
+									{/if}
+									{#if st?.temperature_c}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Temp:</span>
+											<span class="text-gray-300">{st.temperature_c}°C</span>
+										</div>
+									{/if}
+								{:else}
+									<!-- APC UPS/PDU stats -->
+									{#if st?.load_watts || st?.load_pct || st?.load_amps}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Load:</span>
+											{#if st.load_watts}<span class="text-gray-300">{st.load_watts}W</span>{/if}
+											{#if st.load_pct}<span class="text-gray-300">{st.load_pct}%</span>{/if}
+											{#if st.load_amps}<span class="text-gray-400">({st.load_amps}A)</span>{/if}
+										</div>
+									{/if}
+									{#if st?.voltage}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Voltage:</span>
+											<span class="text-gray-300">{st.voltage}V</span>
+										</div>
+									{/if}
+									{#if st?.battery_pct != null && st.battery_pct > 0}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Battery:</span>
+											<span class={st.battery_pct > 50 ? 'text-green-400' : st.battery_pct > 20 ? 'text-yellow-400' : 'text-red-400'}>
+												{st.battery_pct}%
+											</span>
+											{#if st.runtime_min}
+												<span class="text-gray-500">({st.runtime_min} min)</span>
+											{/if}
+										</div>
+									{/if}
+									{#if st?.temperature_c}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Temp:</span>
+											<span class="text-gray-300">{st.temperature_c}°C</span>
+										</div>
+									{/if}
+								{/if}
+								{#if !st}
+									<p class="font-mono text-xs text-gray-500">{server.bmc_ip}</p>
+								{/if}
+							</div>
 
-						<div class="flex items-center gap-2">
-							<button
-								onclick={() => openIPMI(server.name)}
-								disabled={openingIPMI === server.name}
-								class="rounded-md bg-gray-700 px-3 py-2 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-							>
-								{#if openingIPMI === server.name}
-									Opening...
+							<!-- Actions -->
+							<div class="flex items-center justify-between border-t border-gray-800 pt-3">
+								{#if server.has_active_session}
+									<span class="text-xs text-green-400">Session active</span>
 								{:else}
-									IPMI
+									<span></span>
 								{/if}
-							</button>
-							<button
-								onclick={() => connect(server.name)}
-								disabled={connecting === server.name}
-								class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-							>
-								{#if connecting === server.name}
-									Connecting...
-								{:else}
-									KVM
-								{/if}
-							</button>
+
+								<div class="flex items-center gap-2">
+									<button
+										onclick={() => openIPMI(server.name)}
+										disabled={openingIPMI === server.name}
+										class="rounded-md bg-gray-700 px-3 py-1.5 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										{#if openingIPMI === server.name}
+											Opening...
+										{:else}
+											{server.board_type === 'apc_ups' ? 'Panel' : 'IPMI'}
+										{/if}
+									</button>
+									{#if server.board_type !== 'apc_ups'}
+										<button
+											onclick={() => connect(server.name)}
+											disabled={connecting === server.name}
+											class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+										>
+											{#if connecting === server.name}
+												Connecting...
+											{:else}
+												KVM
+											{/if}
+										</button>
+									{/if}
+								</div>
+							</div>
 						</div>
-					</div>
+					{/each}
 				</div>
-			{/each}
-		</div>
+			</div>
+		{/each}
 	{/if}
 </div>
