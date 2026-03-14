@@ -48,20 +48,25 @@ func (a *IDRAC9Authenticator) Authenticate(ctx context.Context, host string, por
 		return nil, nil, fmt.Errorf("iDRAC9 login: %w", err)
 	}
 
-	// Get virtual console launch info to obtain VCSID token.
-	wssURL, err := a.getVConsoleURL(ctx, baseURL, host, port, sess)
+	// Configure VNC on the iDRAC9 and set a known password via Redfish.
+	// iDRAC9's proprietary WSS protocol isn't compatible with noVNC,
+	// so we use the standard VNC server instead.
+	vncPassword, err := a.configureVNC(ctx, host, port, username, password)
 	if err != nil {
 		_ = a.logoutSession(ctx, baseURL, sess)
-		return nil, nil, fmt.Errorf("iDRAC9 vconsole: %w", err)
+		return nil, nil, fmt.Errorf("iDRAC9 VNC setup: %w", err)
 	}
+
+	log.Printf("iDRAC9 %s: authenticated, VNC target %s:5901", host, host)
 
 	creds := &models.BMCCredentials{
 		SessionCookie: sess.SessionCookie,
 		CSRFToken:     sess.XSRFToken,
 	}
 	connectInfo := &models.KVMConnectInfo{
-		Mode:      models.KVMModeWebSocket,
-		TargetURL: wssURL,
+		Mode:        models.KVMModeVNC,
+		TargetAddr:  fmt.Sprintf("%s:5901", host),
+		VNCPassword: vncPassword,
 	}
 
 	return creds, connectInfo, nil
@@ -135,63 +140,45 @@ func (a *IDRAC9Authenticator) login(ctx context.Context, baseURL, username, pass
 	return sess, nil
 }
 
-// getVConsoleURL fetches the virtual console launch URL and extracts the WSS address.
-func (a *IDRAC9Authenticator) getVConsoleURL(ctx context.Context, baseURL, host string, port int, sess *idrac9Session) (string, error) {
-	endpoint := baseURL + "/sysmgmt/2015/server/vconsole"
+// configureVNC enables the VNC server on iDRAC9 via Redfish and sets a known password.
+// Returns the VNC password to use for connection.
+// iDRAC9 requires VNC passwords to meet complexity requirements (upper, lower, digit, special).
+func (a *IDRAC9Authenticator) configureVNC(ctx context.Context, host string, port int, username, password string) (string, error) {
+	redfishURL := fmt.Sprintf("https://%s:%d/redfish/v1/Managers/iDRAC.Embedded.1/Attributes", host, port)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	// Use the BMC password with complexity suffix to meet iDRAC9's VNC password policy.
+	vncPassword := password + "1!"
+
+	attrs := map[string]any{
+		"Attributes": map[string]string{
+			"VNCServer.1.Enable":   "Enabled",
+			"VNCServer.1.Password": vncPassword,
+		},
+	}
+	body, err := json.Marshal(attrs)
+	if err != nil {
+		return "", fmt.Errorf("marshaling VNC config: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, redfishURL, strings.NewReader(string(body)))
 	if err != nil {
 		return "", err
 	}
-	req.AddCookie(&http.Cookie{Name: "-http-session-", Value: sess.SessionCookie})
-	req.Header.Set("XSRF-TOKEN", sess.XSRFToken)
+	req.SetBasicAuth(username, password)
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := idracHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("sending vconsole request: %w", err)
+		return "", fmt.Errorf("sending Redfish PATCH: %w", err)
 	}
 	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading vconsole response: %w", err)
-	}
+	respBody, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("vconsole returned HTTP %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("Redfish VNC config failed (HTTP %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	// Response is JSON with a "Location" field containing the viewer URL.
-	// Parse URL params to get VCSID.
-	var result map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("parsing vconsole JSON: %w", err)
-	}
-
-	loc, _ := result["Location"].(string)
-	if loc == "" {
-		return "", fmt.Errorf("no Location in vconsole response: %s", string(body))
-	}
-
-	parsed, err := url.Parse(loc)
-	if err != nil {
-		return "", fmt.Errorf("parsing vconsole Location URL: %w", err)
-	}
-
-	vcsid := parsed.Query().Get("VCSID")
-	if vcsid == "" {
-		return "", fmt.Errorf("no VCSID in vconsole URL: %s", loc)
-	}
-
-	// Construct the WSS URL for the VNC-over-WebSocket endpoint.
-	// iDRAC9 serves this on the same port (443).
-	kvmPort := parsed.Query().Get("kvmport")
-	if kvmPort == "" || kvmPort == "443" {
-		kvmPort = fmt.Sprintf("%d", port)
-	}
-
-	wssURL := fmt.Sprintf("wss://%s:%s/vnc/vconsole?vck=%s", host, kvmPort, url.QueryEscape(vcsid))
-	return wssURL, nil
+	return vncPassword, nil
 }
 
 func (a *IDRAC9Authenticator) logoutSession(ctx context.Context, baseURL string, sess *idrac9Session) error {
