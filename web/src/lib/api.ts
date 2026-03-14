@@ -81,6 +81,26 @@ export async function createIPMISession(name: string): Promise<IPMISession> {
 	return res.json();
 }
 
+export interface DeviceStatus {
+	online: boolean;
+	power_state?: string;
+	model?: string;
+	health?: string;
+	load_watts?: number;
+	load_pct?: number;
+	load_amps?: number;
+	voltage?: number;
+	battery_pct?: number;
+	runtime_min?: number;
+	temperature_c?: number;
+}
+
+export async function fetchServerStatuses(): Promise<Record<string, DeviceStatus>> {
+	const res = await fetch(`${API_BASE}/server-status`);
+	if (!res.ok) throw new Error(`Failed to fetch statuses: ${res.statusText}`);
+	return res.json();
+}
+
 export interface AuthStatus {
 	authenticated: boolean;
 	oidc_enabled?: boolean;
