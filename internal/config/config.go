@@ -126,7 +126,12 @@ func setDefaults(cfg *models.AppConfig) {
 
 	for i := range cfg.Servers {
 		if cfg.Servers[i].BMCPort <= 0 {
-			cfg.Servers[i].BMCPort = 80
+			switch cfg.Servers[i].BoardType {
+			case "dell_idrac8", "dell_idrac9":
+				cfg.Servers[i].BMCPort = 443
+			default:
+				cfg.Servers[i].BMCPort = 80
+			}
 		}
 	}
 }

@@ -13,6 +13,30 @@ servers:
     username: "admin"
     credential_env: "BMC_PASSWORD_SURGE"
 
+  - name: "misty"
+    bmc_ip: "10.10.11.194"
+    board_type: "dell_idrac9"
+    username: "root"
+    credential_env: "BMC_PASSWORD_DELL"
+
+  - name: "yucca-1"
+    bmc_ip: "10.10.11.92"
+    board_type: "dell_idrac8"
+    username: "root"
+    credential_env: "BMC_PASSWORD_DELL"
+
+  - name: "yucca-2"
+    bmc_ip: "10.10.11.212"
+    board_type: "dell_idrac8"
+    username: "root"
+    credential_env: "BMC_PASSWORD_DELL"
+
+  - name: "yucca-3"
+    bmc_ip: "10.10.11.247"
+    board_type: "dell_idrac8"
+    username: "root"
+    credential_env: "BMC_PASSWORD_DELL"
+
 settings:
   max_concurrent_sessions: 4
   session_timeout_minutes: 60

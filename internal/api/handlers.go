@@ -169,7 +169,7 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	}
 
 	log.Printf("Session %s: authenticating with BMC %s...", session.ID, serverCfg.BMCIP)
-	creds, args, err := authenticator.Authenticate(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
+	creds, connectInfo, err := authenticator.Authenticate(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
 	if err != nil {
 		log.Printf("Session %s: BMC authentication failed: %v", session.ID, err)
 		session.Status = models.SessionError
@@ -180,10 +180,24 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 
 	// Store BMC creds for later logout
 	s.BMCCreds[session.ID] = creds
+	session.ConnMode = connectInfo.Mode
 
-	// Start Docker container
-	log.Printf("Session %s: starting Docker container for %s...", session.ID, serverCfg.Name)
-	wsPort, err := s.Container.StartContainer(ctx, session, args)
+	switch connectInfo.Mode {
+	case models.KVMModeContainer:
+		s.startContainerSession(ctx, session, serverCfg, authenticator, creds, connectInfo)
+	case models.KVMModeWebSocket, models.KVMModeVNC:
+		s.startDirectSession(ctx, session, serverCfg, authenticator, creds, connectInfo)
+	default:
+		session.Status = models.SessionError
+		session.Error = "unknown KVM mode: " + string(connectInfo.Mode)
+		s.Sessions.Set(session)
+	}
+}
+
+// startContainerSession launches a JViewer container (AMI MegaRAC flow).
+func (s *Server) startContainerSession(ctx context.Context, session *models.KVMSession, serverCfg *models.ServerConfig, authenticator auth.BMCAuthenticator, creds *models.BMCCredentials, connectInfo *models.KVMConnectInfo) {
+	log.Printf("Session %s: starting container for %s...", session.ID, serverCfg.Name)
+	wsPort, err := s.Container.StartContainer(ctx, session, connectInfo.ContainerArgs)
 	if err != nil {
 		log.Printf("Session %s: failed to start container: %v", session.ID, err)
 		session.Status = models.SessionError
@@ -196,10 +210,7 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	session.WebSocketPort = wsPort
 	s.Sessions.Set(session)
 
-	// Wait for websockify inside the container to accept WebSocket connections
-	// before reporting the session as connected. Without this, the frontend
-	// opens a WebSocket immediately but websockify isn't ready, causing the
-	// browser connection to fail and trigger an unnecessary reconnect cycle.
+	// Wait for websockify to accept connections
 	log.Printf("Session %s: waiting for container websockify on port %d...", session.ID, wsPort)
 	wsURL := url.URL{
 		Scheme: "ws",
@@ -230,8 +241,25 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	session.Status = models.SessionConnected
 	session.LastActivity = time.Now()
 	s.Sessions.Set(session)
-
 	log.Printf("Session %s: connected to %s on port %d", session.ID, serverCfg.Name, wsPort)
+}
+
+// startDirectSession sets up a direct proxy session (WSS or VNC, no container).
+func (s *Server) startDirectSession(ctx context.Context, session *models.KVMSession, serverCfg *models.ServerConfig, authenticator auth.BMCAuthenticator, creds *models.BMCCredentials, connectInfo *models.KVMConnectInfo) {
+	switch connectInfo.Mode {
+	case models.KVMModeWebSocket:
+		session.KVMTarget = connectInfo.TargetURL
+		log.Printf("Session %s: direct WSS proxy to %s", session.ID, connectInfo.TargetURL)
+	case models.KVMModeVNC:
+		session.KVMTarget = connectInfo.TargetAddr
+		session.KVMPassword = connectInfo.VNCPassword
+		log.Printf("Session %s: direct VNC proxy to %s", session.ID, connectInfo.TargetAddr)
+	}
+
+	session.Status = models.SessionConnected
+	session.LastActivity = time.Now()
+	s.Sessions.Set(session)
+	log.Printf("Session %s: connected to %s (direct %s)", session.ID, serverCfg.Name, connectInfo.Mode)
 }
 
 // GetSession handles GET /api/sessions/{id}.
@@ -243,8 +271,8 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if container is still running
-	if session.Status == models.SessionConnected && session.ContainerID != "" {
+	// Check if container is still running (only relevant for container-mode sessions)
+	if session.Status == models.SessionConnected && session.ContainerID != "" && session.ConnMode == models.KVMModeContainer {
 		if !s.Container.IsContainerRunning(r.Context(), session.ContainerID) {
 			session.Status = models.SessionDisconnected
 			s.Sessions.Set(session)
@@ -358,6 +386,7 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 	log.Printf("IPMI session for %s: authenticated, credentials injected into proxy", name)
 
 	writeJSON(w, http.StatusOK, map[string]any{
+		"board_type":     serverCfg.BoardType,
 		"session_cookie": creds.SessionCookie,
 		"csrf_token":     creds.CSRFToken,
 		"username":       creds.Username,

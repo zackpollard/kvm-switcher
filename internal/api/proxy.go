@@ -16,10 +16,11 @@ import (
 
 // bmcProxyEntry holds a reverse proxy and its cookie jar for a single BMC.
 type bmcProxyEntry struct {
-	proxy    *httputil.ReverseProxy
-	jar      http.CookieJar
-	mu       sync.RWMutex
-	bmcCreds *models.BMCCredentials // pre-authenticated BMC session credentials
+	proxy     *httputil.ReverseProxy
+	jar       http.CookieJar
+	mu        sync.RWMutex
+	bmcCreds  *models.BMCCredentials // pre-authenticated BMC session credentials
+	boardType string
 }
 
 func (e *bmcProxyEntry) setBMCCredentials(creds *models.BMCCredentials) {
@@ -81,23 +82,30 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	entry.proxy.ServeHTTP(w, r)
 }
 
+// bmcScheme returns the URL scheme for a given board type.
+func bmcScheme(boardType string) string {
+	switch boardType {
+	case "dell_idrac8", "dell_idrac9":
+		return "https"
+	default:
+		return "http"
+	}
+}
+
 // getOrCreateProxy returns a cached proxy entry for the given server.
 func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntry {
 	if v, ok := bmcProxies.Load(name); ok {
 		return v.(*bmcProxyEntry)
 	}
 
-	bmcOrigin := fmt.Sprintf("http://%s:%d", serverCfg.BMCIP, serverCfg.BMCPort)
+	scheme := bmcScheme(serverCfg.BoardType)
+	bmcOrigin := fmt.Sprintf("%s://%s:%d", scheme, serverCfg.BMCIP, serverCfg.BMCPort)
 	target, _ := url.Parse(bmcOrigin)
 
 	// Cookie jar stores BMC session cookies server-side.
-	// Browsers can't set cookies from SW respondWith() responses,
-	// so the backend must manage them.
 	jar, _ := cookiejar.New(nil)
 
-	// Create entry first so the proxy closures can reference it
-	// for pre-authenticated BMC credentials.
-	entry := &bmcProxyEntry{jar: jar}
+	entry := &bmcProxyEntry{jar: jar, boardType: serverCfg.BoardType}
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
@@ -106,27 +114,17 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			req.Host = target.Host
 
 			// Strip our auth cookies and browser-side BMC cookies
-			// (the proxy manages BMC session cookies server-side)
-			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie")
+			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie", "-http-session-")
 
 			// Add stored BMC cookies from the jar
 			for _, c := range jar.Cookies(req.URL) {
 				req.AddCookie(c)
 			}
 
-			// Inject pre-authenticated BMC credentials if available.
-			// This ensures all proxied requests carry the session cookie
-			// and CSRF token, even if the browser/SW didn't send them.
+			// Inject pre-authenticated BMC credentials (board-type-specific)
 			if creds := entry.getBMCCredentials(); creds != nil {
-				req.AddCookie(&http.Cookie{Name: "SessionCookie", Value: creds.SessionCookie})
-				if creds.CSRFToken != "" {
-					// AMI MegaRAC checks the "CSRFTOKEN" header (no X- prefix)
-					// on non-WEBSES endpoints. Set it so all proxied requests
-					// pass CSRF validation even before the browser has the token.
-					req.Header.Set("CSRFTOKEN", creds.CSRFToken)
-				}
+				injectBMCCredentials(req, entry.boardType, creds)
 			}
-
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// Store any Set-Cookie from the BMC in our jar
@@ -158,6 +156,38 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 	return actual.(*bmcProxyEntry)
 }
 
+// injectBMCCredentials adds board-type-specific auth to an outgoing proxy request.
+func injectBMCCredentials(req *http.Request, boardType string, creds *models.BMCCredentials) {
+	switch boardType {
+	case "dell_idrac9":
+		// iDRAC9: -http-session- cookie + XSRF-TOKEN header
+		req.AddCookie(&http.Cookie{Name: "-http-session-", Value: creds.SessionCookie})
+		if creds.CSRFToken != "" {
+			req.Header.Set("XSRF-TOKEN", creds.CSRFToken)
+		}
+
+	case "dell_idrac8":
+		// iDRAC8: -http-session- cookie + ST2 header
+		req.AddCookie(&http.Cookie{Name: "-http-session-", Value: creds.SessionCookie})
+		if creds.CSRFToken != "" {
+			req.Header.Set("ST2", creds.CSRFToken)
+		}
+		// Inject ST1 as URL parameter
+		if creds.Extra != nil && creds.Extra["st1"] != "" {
+			q := req.URL.Query()
+			q.Set("ST1", creds.Extra["st1"])
+			req.URL.RawQuery = q.Encode()
+		}
+
+	default:
+		// AMI MegaRAC: SessionCookie cookie + CSRFTOKEN header
+		req.AddCookie(&http.Cookie{Name: "SessionCookie", Value: creds.SessionCookie})
+		if creds.CSRFToken != "" {
+			req.Header.Set("CSRFTOKEN", creds.CSRFToken)
+		}
+	}
+}
+
 // rewriteLocationForBMC converts BMC Location headers to /__bmc/{name}/... paths.
 func rewriteLocationForBMC(loc, bmcOrigin, name string) string {
 	prefix := "/__bmc/" + name
@@ -166,11 +196,14 @@ func rewriteLocationForBMC(loc, bmcOrigin, name string) string {
 	if strings.HasPrefix(loc, bmcOrigin) {
 		return prefix + strings.TrimPrefix(loc, bmcOrigin)
 	}
-	// Handle without explicit port (BMC might omit :80)
-	if idx := strings.Index(bmcOrigin, ":80"); idx > 0 {
-		noPort := bmcOrigin[:idx]
-		if strings.HasPrefix(loc, noPort) {
-			return prefix + strings.TrimPrefix(loc, noPort)
+	// Handle without explicit port (BMC might omit default port)
+	if idx := strings.LastIndex(bmcOrigin, ":"); idx > 0 {
+		portSuffix := bmcOrigin[idx:]
+		if portSuffix == ":80" || portSuffix == ":443" {
+			noPort := bmcOrigin[:idx]
+			if strings.HasPrefix(loc, noPort+"/") {
+				return prefix + strings.TrimPrefix(loc, noPort)
+			}
 		}
 	}
 

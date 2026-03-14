@@ -86,9 +86,30 @@ type KVMSession struct {
 	Status        SessionStatus `json:"status"`
 	ContainerID   string        `json:"container_id,omitempty"`
 	WebSocketPort int           `json:"websocket_port,omitempty"`
+	ConnMode      KVMMode       `json:"conn_mode,omitempty"`
+	KVMTarget     string        `json:"-"`                      // WSS URL or VNC host:port (internal only)
+	KVMPassword   string        `json:"kvm_password,omitempty"` // VNC auth password (if needed)
 	CreatedAt     time.Time     `json:"created_at"`
 	LastActivity  time.Time     `json:"last_activity"`
 	Error         string        `json:"error,omitempty"`
+}
+
+// KVMMode describes how a KVM session connects to the BMC.
+type KVMMode string
+
+const (
+	KVMModeContainer KVMMode = "container" // Launch a container (AMI MegaRAC JViewer)
+	KVMModeWebSocket KVMMode = "websocket" // Proxy WS → remote WSS (iDRAC9 HTML5)
+	KVMModeVNC       KVMMode = "vnc"       // Proxy WS → raw TCP VNC (iDRAC8)
+)
+
+// KVMConnectInfo describes how to reach the KVM stream for a session.
+type KVMConnectInfo struct {
+	Mode          KVMMode
+	ContainerArgs *JViewerArgs // For container mode
+	TargetURL     string       // For websocket mode (wss://...)
+	TargetAddr    string       // For vnc mode (host:port)
+	VNCPassword   string       // For vnc mode: password for VNC auth
 }
 
 // BMCCredentials holds the authentication tokens for a BMC session.
@@ -100,6 +121,7 @@ type BMCCredentials struct {
 	Username      string // BMC username (from getrole.asp)
 	Privilege     int    // BMC privilege number (from getrole.asp), e.g. 4=Admin
 	ExtendedPriv  int    // Extended privileges bitmask (from getrole.asp)
+	Extra         map[string]string // Board-specific extra tokens
 }
 
 // JViewerArgs holds all arguments needed to launch JViewer.

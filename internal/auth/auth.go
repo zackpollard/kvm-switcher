@@ -8,11 +8,11 @@ import (
 
 // BMCAuthenticator defines the interface for authenticating with different BMC types.
 type BMCAuthenticator interface {
-	// Authenticate logs in to the BMC and retrieves a KVM session with tokens.
-	Authenticate(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, *models.JViewerArgs, error)
+	// Authenticate logs in to the BMC and retrieves KVM connection info.
+	Authenticate(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, *models.KVMConnectInfo, error)
 
-	// CreateWebSession creates a BMC web session (login only, no KVM/JNLP).
-	// Returns credentials with SessionCookie and CSRFToken for web UI access.
+	// CreateWebSession creates a BMC web session (login only, no KVM).
+	// Returns credentials for web UI access.
 	CreateWebSession(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, error)
 
 	// Logout ends the BMC session.
