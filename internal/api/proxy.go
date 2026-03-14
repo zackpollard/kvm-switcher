@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -213,15 +217,27 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 				resp.Header.Set("Location", rewriteLocationForBMC(loc, bmcOrigin, name))
 			}
 
-			// iDRAC8 serves gzip-compressed content with Content-Type: application/x-gzip
-			// instead of using Content-Encoding: gzip properly. Browsers treat this as a
-			// file download rather than rendering it. Fix the headers so browsers decompress
-			// and render the content correctly.
+			// iDRAC8 sets Content-Type: application/x-gzip on some responses
+			// (typically 302 redirects). Fix to the correct MIME type.
 			if resp.Header.Get("Content-Type") == "application/x-gzip" {
-				// Infer correct Content-Type from the request URL extension
-				ct := inferContentType(resp.Request.URL.Path)
-				resp.Header.Set("Content-Type", ct)
-				resp.Header.Set("Content-Encoding", "gzip")
+				resp.Header.Set("Content-Type", inferContentType(resp.Request.URL.Path))
+			}
+
+			// Decompress gzip responses at the proxy level so the service
+			// worker receives plain content. This avoids browser-specific
+			// differences in how SWs handle Content-Encoding (Firefox may
+			// not transparently decompress in SW fetch, causing downloads).
+			if resp.Header.Get("Content-Encoding") == "gzip" {
+				if reader, err := gzip.NewReader(resp.Body); err == nil {
+					decompressed, readErr := io.ReadAll(reader)
+					reader.Close()
+					if readErr == nil {
+						resp.Body = io.NopCloser(bytes.NewReader(decompressed))
+						resp.Header.Del("Content-Encoding")
+						resp.ContentLength = int64(len(decompressed))
+						resp.Header.Set("Content-Length", strconv.Itoa(len(decompressed)))
+					}
+				}
 			}
 
 			// iDRAC8 serves .jsesp (embedded JS) files as text/html. Chrome's strict
@@ -245,9 +261,10 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 				resp.Header.Set("X-KVM-AutoLogin", "true")
 			}
 
-			// Remove headers that block framing/embedding
+			// Remove headers that block framing/embedding or trigger downloads
 			resp.Header.Del("Content-Security-Policy")
 			resp.Header.Del("X-Frame-Options")
+			resp.Header.Del("Content-Disposition")
 			return nil
 		},
 		Transport: &http.Transport{
