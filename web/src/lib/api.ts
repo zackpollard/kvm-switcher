@@ -93,6 +93,9 @@ export interface DeviceStatus {
 	battery_pct?: number;
 	runtime_min?: number;
 	temperature_c?: number;
+	app_version?: string;
+	image_version?: string;
+	update_available?: boolean;
 }
 
 export async function fetchServerStatuses(): Promise<Record<string, DeviceStatus>> {

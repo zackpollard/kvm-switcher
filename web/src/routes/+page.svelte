@@ -13,6 +13,7 @@
 		ami_megarac: 'Servers',
 		dell_idrac8: 'Servers',
 		dell_idrac9: 'Servers',
+		nanokvm: 'Servers',
 		apc_ups: 'Power',
 	};
 
@@ -32,6 +33,7 @@
 			ami_megarac: 'MegaRAC',
 			dell_idrac8: 'iDRAC8',
 			dell_idrac9: 'iDRAC9',
+			nanokvm: 'NanoKVM',
 			apc_ups: 'APC NMC',
 		};
 		return labels[bt] || bt;
@@ -201,6 +203,18 @@
 											<span class="text-gray-300">{st.temperature_c}°C</span>
 										</div>
 									{/if}
+									{#if st?.app_version || st?.image_version}
+										<div class="flex items-center gap-2">
+											<span class="text-gray-500">Version:</span>
+											<span class="text-gray-300">{st.app_version || ''}</span>
+											{#if st.image_version}
+												<span class="text-gray-500">({st.image_version})</span>
+											{/if}
+											{#if st.update_available}
+												<span class="rounded-full bg-yellow-900/50 px-2 py-0.5 text-xs text-yellow-400">Update</span>
+											{/if}
+										</div>
+									{/if}
 								{:else}
 									<!-- APC UPS/PDU stats -->
 									{#if st?.load_watts || st?.load_pct || st?.load_amps}
@@ -257,10 +271,10 @@
 										{#if openingIPMI === server.name}
 											Opening...
 										{:else}
-											{server.board_type === 'apc_ups' ? 'Panel' : 'IPMI'}
+											{server.board_type === 'apc_ups' ? 'Panel' : server.board_type === 'nanokvm' ? 'KVM' : 'IPMI'}
 										{/if}
 									</button>
-									{#if server.board_type !== 'apc_ups'}
+									{#if server.board_type !== 'apc_ups' && server.board_type !== 'nanokvm'}
 										<button
 											onclick={() => connect(server.name)}
 											disabled={connecting === server.name}
