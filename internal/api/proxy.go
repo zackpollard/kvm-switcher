@@ -211,6 +211,18 @@ func handleLoginIntercept(w http.ResponseWriter, r *http.Request, path string, e
 			log.Printf("BMC proxy: intercepted iDRAC8 login, returning cached session")
 			return true
 		}
+
+	case "ami_megarac", "":
+		// AMI MegaRAC: intercept logout.asp to prevent the managed session
+		// from being invalidated. The SW may trigger a logout on page load
+		// or session refresh — return a fake OK so the session stays alive.
+		if r.Method == http.MethodGet && path == "/rpc/WEBSES/logout.asp" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"WEBSES":{"SESSID":"Disconnected"}}`)
+			log.Printf("BMC proxy: intercepted MegaRAC logout, returning fake OK")
+			return true
+		}
 	}
 
 	return false
