@@ -135,18 +135,16 @@ test.describe('NanoKVM', () => {
     expect(headers.nanoToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
   });
 
-  test('status API reports NanoKVM device info', async ({ page }) => {
-    // The status poller runs in the background — wait for it to populate
-    await page.goto('/');
-    // Poll the status API until the NanoKVM shows data (session manager + poller need time)
+  test('status API reports NanoKVM device info', async ({ context }) => {
+    const page = await context.newPage();
+    await registerServiceWorker(page);
+    // Ensure session exists so poller can get detailed stats
+    await createIPMISession(page, SERVER);
+
+    // Wait for poller to pick up the session
+    await page.waitForTimeout(35000);
+
     const status = await page.evaluate(async (server: string) => {
-      for (let i = 0; i < 20; i++) {
-        const res = await fetch('/api/server-status');
-        const data = await res.json();
-        if (data[server]?.app_version) return data[server];
-        await new Promise(r => setTimeout(r, 3000));
-      }
-      // Return whatever we have after timeout
       const res = await fetch('/api/server-status');
       const data = await res.json();
       return data[server] || {};
