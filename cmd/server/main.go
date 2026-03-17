@@ -93,10 +93,13 @@ func main() {
 		w.Write([]byte(`{"status":"ready"}`))
 	})
 
+	// Rate limiter for mutation endpoints
+	rateLimited := middleware.RateLimitMiddleware(cfg.Settings.RateLimitRPM)
+
 	// Auth routes (always registered, but login redirects only work when OIDC is enabled)
 	if oidcProvider != nil {
-		mux.HandleFunc("GET /auth/login", oidcProvider.HandleLogin)
-		mux.HandleFunc("GET /auth/callback", oidcProvider.HandleCallback)
+		mux.Handle("GET /auth/login", rateLimited(http.HandlerFunc(oidcProvider.HandleLogin)))
+		mux.Handle("GET /auth/callback", rateLimited(http.HandlerFunc(oidcProvider.HandleCallback)))
 		mux.HandleFunc("GET /auth/logout", oidcProvider.HandleLogout)
 	}
 	// /auth/me is always available - returns auth status
@@ -110,36 +113,30 @@ func main() {
 	}
 
 	// API routes - wrap with OIDC middleware if enabled
+	registerAPIRoutes := func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /api/servers", srv.ListServers)
+		mux.Handle("POST /api/sessions", rateLimited(http.HandlerFunc(srv.CreateSession)))
+		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
+		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
+		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+		mux.Handle("POST /api/ipmi-session/{name}", rateLimited(http.HandlerFunc(srv.CreateIPMISession)))
+		mux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
+		mux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
+		mux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
+		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
+		mux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
+	}
+
 	if oidcProvider != nil {
 		apiMux := http.NewServeMux()
-		apiMux.HandleFunc("GET /api/servers", srv.ListServers)
-		apiMux.HandleFunc("POST /api/sessions", srv.CreateSession)
-		apiMux.HandleFunc("GET /api/sessions", srv.ListSessions)
-		apiMux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
-		apiMux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
-		apiMux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
-		apiMux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
-		apiMux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
-		apiMux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
-		apiMux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
-		apiMux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
+		registerAPIRoutes(apiMux)
 
 		protected := oidcProvider.Middleware(apiMux)
 		mux.Handle("/api/", protected)
 		mux.Handle("/ws/", protected)
 		mux.Handle("/__bmc/", protected)
 	} else {
-		mux.HandleFunc("GET /api/servers", srv.ListServers)
-		mux.HandleFunc("POST /api/sessions", srv.CreateSession)
-		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
-		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
-		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
-		mux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
-		mux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
-		mux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
-		mux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
-		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
-		mux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
+		registerAPIRoutes(mux)
 	}
 
 	// Serve frontend static files
