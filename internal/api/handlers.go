@@ -306,6 +306,12 @@ func (s *Server) startDirectSession(ctx context.Context, session *models.KVMSess
 	log.Printf("Session %s: connected to %s (direct %s)", session.ID, serverCfg.Name, connectInfo.Mode)
 }
 
+// sessionResponse wraps a KVMSession with additional computed fields.
+type sessionResponse struct {
+	*models.KVMSession
+	IdleTimeoutRemaining *float64 `json:"idle_timeout_remaining_seconds,omitempty"`
+}
+
 // GetSession handles GET /api/sessions/{id}.
 func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -323,7 +329,33 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, session)
+	resp := sessionResponse{KVMSession: session}
+	if session.Status == models.SessionConnected {
+		idleTimeout := time.Duration(s.Config.Settings.IdleTimeoutMinutes) * time.Minute
+		remaining := idleTimeout - time.Since(session.LastActivity)
+		if remaining < 0 {
+			remaining = 0
+		}
+		secs := remaining.Seconds()
+		resp.IdleTimeoutRemaining = &secs
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// KeepAliveSession handles PATCH /api/sessions/{id}/keepalive.
+func (s *Server) KeepAliveSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	session, ok := s.Sessions.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	session.LastActivity = time.Now()
+	s.Sessions.Set(session)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ListSessions handles GET /api/sessions.
