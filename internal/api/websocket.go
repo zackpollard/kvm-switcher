@@ -101,15 +101,18 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 	log.Printf("Session %s: proxying WebSocket to WSS %s", session.ID, session.KVMTarget)
 
 	// The iDRAC9 WSS endpoint needs the session cookie + XSRF token for auth.
-	creds := s.BMCCreds[session.ID]
+	s.bmcCredsMu.Lock()
+	credEntry := s.BMCCreds[session.ID]
+	s.bmcCredsMu.Unlock()
+
 	headers := http.Header{}
-	if creds != nil {
-		if creds.SessionCookie != "" {
-			cookie := (&http.Cookie{Name: "-http-session-", Value: creds.SessionCookie}).String()
+	if credEntry != nil && credEntry.Creds != nil {
+		if credEntry.Creds.SessionCookie != "" {
+			cookie := (&http.Cookie{Name: "-http-session-", Value: credEntry.Creds.SessionCookie}).String()
 			headers.Set("Cookie", cookie)
 		}
-		if creds.CSRFToken != "" {
-			headers.Set("XSRF-TOKEN", creds.CSRFToken)
+		if credEntry.Creds.CSRFToken != "" {
+			headers.Set("XSRF-TOKEN", credEntry.Creds.CSRFToken)
 		}
 	}
 

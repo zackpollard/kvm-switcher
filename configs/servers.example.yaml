@@ -70,6 +70,14 @@ settings:
   idle_timeout_minutes: 30
   listen_address: "0.0.0.0:8080"
 
+  # Production hardening (all optional with sensible defaults)
+  # cors_origins: ["*"]                 # Allowed CORS origins (env: KVM_CORS_ORIGINS)
+  # rate_limit_rpm: 60                  # Per-IP rate limit for session/auth endpoints (env: KVM_RATE_LIMIT_RPM)
+  # db_path: "data/kvm-switcher.db"     # SQLite database for audit log + persistent sessions (env: KVM_DB_PATH)
+  # audit_log: true                     # Enable audit logging (env: KVM_AUDIT_LOG)
+  # metrics_enabled: false              # Enable Prometheus /metrics endpoint (env: KVM_METRICS_ENABLED)
+  # bmc_creds_ttl_minutes: 120          # TTL for stale BMC credential cleanup (env: KVM_BMC_CREDS_TTL_MINUTES)
+
 # Optional: OIDC authentication with role-based server access
 # When enabled, users must authenticate via OIDC and can only access
 # servers their roles grant them permission to.

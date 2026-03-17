@@ -121,10 +121,17 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 		scheme = handler.Scheme()
 	}
 	bmcOrigin := fmt.Sprintf("%s://%s:%d", scheme, serverCfg.BMCIP, serverCfg.BMCPort)
-	target, _ := url.Parse(bmcOrigin)
+	target, err := url.Parse(bmcOrigin)
+	if err != nil {
+		log.Printf("BMC proxy: failed to parse origin URL %q: %v", bmcOrigin, err)
+		target, _ = url.Parse("http://localhost") // fallback; should not happen
+	}
 
 	// Cookie jar stores BMC session cookies server-side.
-	jar, _ := cookiejar.New(nil)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		log.Printf("BMC proxy: failed to create cookie jar: %v", err)
+	}
 
 	entry := &bmcProxyEntry{jar: jar, boardType: serverCfg.BoardType}
 

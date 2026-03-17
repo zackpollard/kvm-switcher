@@ -151,24 +151,35 @@ make dev-backend
 
 ### Settings
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| `max_concurrent_sessions` | Maximum active KVM sessions | 4 |
-| `session_timeout_minutes` | Max session duration | 60 |
-| `idle_timeout_minutes` | Idle session cleanup threshold | 30 |
-| `container_image` | Docker image for JViewer containers | `kvm-switcher/jviewer:latest` |
-| `listen_address` | HTTP listen address | `0.0.0.0:8080` |
+| Field | Description | Default | Env Override |
+|-------|-------------|---------|-------------|
+| `max_concurrent_sessions` | Maximum active KVM sessions | 4 | — |
+| `session_timeout_minutes` | Max session duration | 60 | — |
+| `idle_timeout_minutes` | Idle session cleanup threshold | 30 | — |
+| `container_image` | Docker image for JViewer containers | `kvm-switcher/jviewer:latest` | — |
+| `listen_address` | HTTP listen address | `0.0.0.0:8080` | — |
+| `cors_origins` | Allowed CORS origins | `["*"]` | `KVM_CORS_ORIGINS` (comma-separated) |
+| `rate_limit_rpm` | Per-IP rate limit (requests/min) for session/auth endpoints | 60 | `KVM_RATE_LIMIT_RPM` |
+| `db_path` | SQLite database path for audit log and persistent sessions | `data/kvm-switcher.db` | `KVM_DB_PATH` |
+| `audit_log` | Enable audit logging | `true` | `KVM_AUDIT_LOG` |
+| `metrics_enabled` | Enable Prometheus metrics at `/metrics` | `false` | `KVM_METRICS_ENABLED` |
+| `bmc_creds_ttl_minutes` | TTL for stale BMC credential cleanup | 120 | `KVM_BMC_CREDS_TTL_MINUTES` |
 
 ## API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| `GET` | `/healthz` | Liveness probe (always 200) |
+| `GET` | `/readyz` | Readiness probe (checks container runtime) |
+| `GET` | `/metrics` | Prometheus metrics (when `metrics_enabled: true`) |
 | `GET` | `/api/servers` | List configured devices |
 | `GET` | `/api/server-status` | Get live status for all devices |
+| `GET` | `/api/audit-log` | Query audit log entries |
 | `POST` | `/api/ipmi-session/{name}` | Create/refresh a BMC web session |
 | `POST` | `/api/sessions` | Start a KVM session |
 | `GET` | `/api/sessions` | List active KVM sessions |
 | `GET` | `/api/sessions/{id}` | Get KVM session status |
+| `PATCH` | `/api/sessions/{id}/keepalive` | Touch session activity timestamp |
 | `DELETE` | `/api/sessions/{id}` | Terminate a KVM session |
 | `GET` | `/ws/kvm/{id}` | WebSocket proxy to KVM container |
 
@@ -179,12 +190,16 @@ cmd/server/          Go backend entry point
 internal/
   api/               REST API, WebSocket proxy, BMC reverse proxy, status poller
   auth/              Device authenticators (MegaRAC, iDRAC8/9, NanoKVM, APC)
-  config/            YAML config loader
+  boards/            Board handler registry (per-device proxy behavior)
+  circuitbreaker/    Circuit breaker for flaky BMC connections
+  config/            YAML config loader with env overrides
   container/         Container runtime interface
   docker/            Docker container lifecycle management
   kubernetes/        Kubernetes pod lifecycle management
+  middleware/        HTTP middleware (CORS, rate limiting, metrics, audit)
   models/            Shared types and session store
   oidc/              OpenID Connect authentication
+  store/             SQLite persistence (audit log, session store)
 web/
   src/               SvelteKit frontend (TypeScript, Tailwind CSS)
   static/sw.js       Service Worker for BMC proxy routing
