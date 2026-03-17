@@ -7,8 +7,23 @@ import (
 	"time"
 
 	"github.com/zackpollard/kvm-switcher/internal/boards"
+	"github.com/zackpollard/kvm-switcher/internal/circuitbreaker"
+	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
+
+// circuitBreakers stores per-server circuit breakers for the status poller.
+var circuitBreakers sync.Map // map[string]*circuitbreaker.Breaker
+
+// getBreaker returns the circuit breaker for a server, creating one if needed.
+func getBreaker(serverName string) *circuitbreaker.Breaker {
+	if v, ok := circuitBreakers.Load(serverName); ok {
+		return v.(*circuitbreaker.Breaker)
+	}
+	b := circuitbreaker.New(3, 60*time.Second)
+	actual, _ := circuitBreakers.LoadOrStore(serverName, b)
+	return actual.(*circuitbreaker.Breaker)
+}
 
 // DeviceStatus is an alias for models.DeviceStatus for backward compatibility within this package.
 type DeviceStatus = models.DeviceStatus
@@ -113,23 +128,56 @@ func fetchDeviceStatus(cfg *models.ServerConfig) *DeviceStatus {
 }
 
 // PollStatuses fetches status for all configured servers in parallel and updates the cache.
+// It uses circuit breakers to skip polling for servers that are consistently failing.
 func PollStatuses(servers []models.ServerConfig, cache *StatusCache) {
 	var wg sync.WaitGroup
 	for i := range servers {
 		wg.Add(1)
 		go func(cfg *models.ServerConfig) {
 			defer wg.Done()
+
+			breaker := getBreaker(cfg.Name)
+
+			// Skip polling if circuit is open
+			if !breaker.Allow() {
+				status := &DeviceStatus{
+					Online:              false,
+					CircuitBreakerState: string(breaker.State()),
+				}
+				cache.Set(cfg.Name, status)
+				middleware.BMCOnline.WithLabelValues(cfg.Name).Set(0)
+				return
+			}
+
 			// Hard deadline per server to prevent a hung connection
 			// from blocking the entire poll cycle.
 			done := make(chan *DeviceStatus, 1)
 			go func() {
 				done <- fetchDeviceStatus(cfg)
 			}()
+
+			var status *DeviceStatus
 			select {
-			case status := <-done:
-				cache.Set(cfg.Name, status)
+			case status = <-done:
 			case <-time.After(30 * time.Second):
-				cache.Set(cfg.Name, &DeviceStatus{Online: false})
+				status = &DeviceStatus{Online: false}
+			}
+
+			// Update circuit breaker
+			if status.Online {
+				breaker.RecordSuccess()
+			} else {
+				breaker.RecordFailure()
+			}
+			status.CircuitBreakerState = string(breaker.State())
+
+			cache.Set(cfg.Name, status)
+
+			// Update Prometheus gauge
+			if status.Online {
+				middleware.BMCOnline.WithLabelValues(cfg.Name).Set(1)
+			} else {
+				middleware.BMCOnline.WithLabelValues(cfg.Name).Set(0)
 			}
 		}(&servers[i])
 	}
