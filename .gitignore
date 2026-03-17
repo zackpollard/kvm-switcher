@@ -16,5 +16,8 @@ web/build/
 # OS
 .DS_Store
 
+# Data
+data/
+
 # Environment
 .env
