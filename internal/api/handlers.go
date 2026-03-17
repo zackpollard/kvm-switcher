@@ -27,7 +27,8 @@ type Server struct {
 	Config      *models.AppConfig
 	Sessions    *models.SessionStore
 	Container   containermgr.Manager
-	BMCCreds    map[string]*models.BMCCredentials // session ID -> BMC creds for logout
+	BMCCreds    map[string]*models.BMCCredEntry // session ID -> BMC creds for logout
+	bmcCredsMu  sync.Mutex
 	StatusCache *StatusCache
 }
 
@@ -47,7 +48,7 @@ func newServerCore(cfg *models.AppConfig, cm containermgr.Manager) *Server {
 		Config:      cfg,
 		Sessions:    models.NewSessionStore(),
 		Container:   cm,
-		BMCCreds:    make(map[string]*models.BMCCredentials),
+		BMCCreds:    make(map[string]*models.BMCCredEntry),
 		StatusCache: sc,
 	}
 }
@@ -195,7 +196,9 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	}
 
 	// Store BMC creds for later logout
-	s.BMCCreds[session.ID] = creds
+	s.bmcCredsMu.Lock()
+	s.BMCCreds[session.ID] = &models.BMCCredEntry{Creds: creds, CreatedAt: time.Now()}
+	s.bmcCredsMu.Unlock()
 	session.ConnMode = connectInfo.Mode
 
 	switch connectInfo.Mode {
@@ -323,7 +326,14 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Logout from BMC
-	if creds, ok := s.BMCCreds[id]; ok {
+	s.bmcCredsMu.Lock()
+	credEntry, hasCreds := s.BMCCreds[id]
+	if hasCreds {
+		delete(s.BMCCreds, id)
+	}
+	s.bmcCredsMu.Unlock()
+
+	if hasCreds {
 		var serverCfg *models.ServerConfig
 		for i := range s.Config.Servers {
 			if s.Config.Servers[i].Name == session.ServerName {
@@ -333,10 +343,9 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 		if serverCfg != nil {
 			if authenticator, ok := auth.Get(serverCfg.BoardType); ok {
-				_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, creds)
+				_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, credEntry.Creds)
 			}
 		}
-		delete(s.BMCCreds, id)
 	}
 
 	session.Status = models.SessionDisconnected
@@ -568,11 +577,73 @@ func (s *Server) HandleNanoKVMWebSocket(w http.ResponseWriter, r *http.Request) 
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
+	buf, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("writeJSON: marshal error: %v", err)
+		http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if _, err := w.Write(buf); err != nil {
+		log.Printf("writeJSON: write error: %v", err)
+	}
+	w.Write([]byte("\n"))
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// CleanupStaleBMCCreds removes BMC credentials older than the configured TTL
+// whose sessions are no longer active. This is called periodically from the
+// session cleanup goroutine.
+func (s *Server) CleanupStaleBMCCreds(ttlMinutes int) {
+	threshold := time.Now().Add(-time.Duration(ttlMinutes) * time.Minute)
+
+	s.bmcCredsMu.Lock()
+	var stale []string
+	for id, entry := range s.BMCCreds {
+		if entry.CreatedAt.Before(threshold) {
+			// Only clean up if session is gone or not active
+			session, ok := s.Sessions.Get(id)
+			if !ok || session.Status == models.SessionDisconnected || session.Status == models.SessionError {
+				stale = append(stale, id)
+			}
+		}
+	}
+	// Remove from map while holding lock, collect creds for logout
+	type logoutInfo struct {
+		creds      *models.BMCCredentials
+		serverName string
+	}
+	var toLogout []logoutInfo
+	for _, id := range stale {
+		entry := s.BMCCreds[id]
+		delete(s.BMCCreds, id)
+		// Find the session to get server name
+		session, ok := s.Sessions.Get(id)
+		if ok {
+			toLogout = append(toLogout, logoutInfo{creds: entry.Creds, serverName: session.ServerName})
+		}
+	}
+	s.bmcCredsMu.Unlock()
+
+	// Perform BMC logout outside the lock
+	for _, info := range toLogout {
+		for i := range s.Config.Servers {
+			if s.Config.Servers[i].Name == info.serverName {
+				if authenticator, ok := auth.Get(s.Config.Servers[i].BoardType); ok {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_ = authenticator.Logout(ctx, s.Config.Servers[i].BMCIP, s.Config.Servers[i].BMCPort, info.creds)
+					cancel()
+				}
+				break
+			}
+		}
+	}
+
+	if len(stale) > 0 {
+		log.Printf("Cleaned up %d stale BMC credential(s)", len(stale))
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -50,20 +51,39 @@ func NewManager(image string) (*Manager, error) {
 }
 
 // allocatePort returns the next available host port for WebSocket.
-func (m *Manager) allocatePort() int {
+// It probes with net.Listen to skip ports already in use.
+func (m *Manager) allocatePort() (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	port := m.portAlloc
-	m.portAlloc++
-	if m.portAlloc > 17999 {
-		m.portAlloc = 16900
+
+	start := m.portAlloc
+	for {
+		port := m.portAlloc
+		m.portAlloc++
+		if m.portAlloc > 17999 {
+			m.portAlloc = 16900
+		}
+
+		// Probe to ensure port is free
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err == nil {
+			ln.Close()
+			return port, nil
+		}
+
+		// Wrapped all the way around — no free ports
+		if m.portAlloc == start {
+			return 0, fmt.Errorf("no free ports in range 16900-17999")
+		}
 	}
-	return port
 }
 
 // StartContainer launches a JViewer Docker container for a KVM session.
 func (m *Manager) StartContainer(ctx context.Context, session *models.KVMSession, args *models.JViewerArgs) (int, error) {
-	hostPort := m.allocatePort()
+	hostPort, err := m.allocatePort()
+	if err != nil {
+		return 0, fmt.Errorf("allocating port: %w", err)
+	}
 
 	env := []string{
 		"BMC_HOST=" + args.Hostname,

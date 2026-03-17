@@ -17,6 +17,7 @@ import (
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"
 	k8smgr "github.com/zackpollard/kvm-switcher/internal/kubernetes"
+	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
@@ -74,6 +75,23 @@ func main() {
 
 	// Set up routes
 	mux := http.NewServeMux()
+
+	// Health/readiness probes (unauthenticated)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		// Check container runtime is reachable
+		if err := cm.CleanupOrphans(r.Context()); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"status":"unavailable","reason":"container runtime unreachable"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ready"}`))
+	})
 
 	// Auth routes (always registered, but login redirects only work when OIDC is enabled)
 	if oidcProvider != nil {
@@ -138,7 +156,7 @@ func main() {
 	}
 
 	// Add CORS middleware
-	handler := corsMiddleware(mux)
+	handler := middleware.CORSMiddleware(cfg.Settings.CORSOrigins)(mux)
 
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -158,7 +176,7 @@ func main() {
 	}()
 
 	// Start session cleanup goroutine
-	go sessionCleanup(srv, cfg.Settings.IdleTimeoutMinutes)
+	go sessionCleanup(srv, &cfg.Settings)
 
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
@@ -206,29 +224,14 @@ func spaHandler(fs http.Handler, dir string) http.Handler {
 	})
 }
 
-// corsMiddleware adds CORS headers for development.
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-// sessionCleanup periodically checks for idle sessions and cleans them up.
-func sessionCleanup(srv *api.Server, idleTimeoutMinutes int) {
+// sessionCleanup periodically checks for idle sessions, cleans them up,
+// and removes stale BMC credentials.
+func sessionCleanup(srv *api.Server, cfg *models.Settings) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		threshold := time.Now().Add(-time.Duration(idleTimeoutMinutes) * time.Minute)
+		threshold := time.Now().Add(-time.Duration(cfg.IdleTimeoutMinutes) * time.Minute)
 
 		for _, session := range srv.Sessions.List() {
 			if session.Status == models.SessionConnected && session.LastActivity.Before(threshold) {
@@ -242,5 +245,8 @@ func sessionCleanup(srv *api.Server, idleTimeoutMinutes int) {
 				srv.Sessions.Set(session)
 			}
 		}
+
+		// Clean up stale BMC credentials
+		srv.CleanupStaleBMCCreds(cfg.BMCCredsTTLMinutes)
 	}
 }

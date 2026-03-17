@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	"gopkg.in/yaml.v3"
@@ -25,6 +27,7 @@ func Load(path string) (*models.AppConfig, error) {
 	}
 
 	setDefaults(&cfg)
+	applyEnvOverrides(&cfg)
 
 	return &cfg, nil
 }
@@ -124,6 +127,23 @@ func setDefaults(cfg *models.AppConfig) {
 		cfg.Settings.ListenAddress = "0.0.0.0:8080"
 	}
 
+	if len(cfg.Settings.CORSOrigins) == 0 {
+		cfg.Settings.CORSOrigins = []string{"*"}
+	}
+	if cfg.Settings.RateLimitRPM <= 0 {
+		cfg.Settings.RateLimitRPM = 60
+	}
+	if cfg.Settings.DBPath == "" {
+		cfg.Settings.DBPath = "data/kvm-switcher.db"
+	}
+	if cfg.Settings.AuditLog == nil {
+		t := true
+		cfg.Settings.AuditLog = &t
+	}
+	if cfg.Settings.BMCCredsTTLMinutes <= 0 {
+		cfg.Settings.BMCCredsTTLMinutes = 120
+	}
+
 	for i := range cfg.Servers {
 		if cfg.Servers[i].BMCPort <= 0 {
 			switch cfg.Servers[i].BoardType {
@@ -132,6 +152,33 @@ func setDefaults(cfg *models.AppConfig) {
 			default:
 				cfg.Servers[i].BMCPort = 80
 			}
+		}
+	}
+}
+
+// applyEnvOverrides reads environment variables and overrides corresponding settings.
+func applyEnvOverrides(cfg *models.AppConfig) {
+	if v := os.Getenv("KVM_CORS_ORIGINS"); v != "" {
+		cfg.Settings.CORSOrigins = strings.Split(v, ",")
+	}
+	if v := os.Getenv("KVM_RATE_LIMIT_RPM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Settings.RateLimitRPM = n
+		}
+	}
+	if v := os.Getenv("KVM_DB_PATH"); v != "" {
+		cfg.Settings.DBPath = v
+	}
+	if v := os.Getenv("KVM_AUDIT_LOG"); v != "" {
+		b := v == "true" || v == "1"
+		cfg.Settings.AuditLog = &b
+	}
+	if v := os.Getenv("KVM_METRICS_ENABLED"); v != "" {
+		cfg.Settings.MetricsEnabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("KVM_BMC_CREDS_TTL_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Settings.BMCCredsTTLMinutes = n
 		}
 	}
 }
