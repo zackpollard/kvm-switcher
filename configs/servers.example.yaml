@@ -1,4 +1,7 @@
 servers:
+  # AMI MegaRAC BMC (e.g. ASRock Rack servers)
+  # KVM: Container-based (JViewer + noVNC)
+  # IPMI: Web proxy with auto-login via cookie injection
   - name: "server-1"
     bmc_ip: "10.10.11.251"
     bmc_port: 80
@@ -6,32 +9,56 @@ servers:
     username: "admin"
     credential_env: "BMC_PASSWORD_SERVER1"
 
-  - name: "server-2"
-    bmc_ip: "10.10.11.14"
-    bmc_port: 80
-    board_type: "ami_megarac"
-    username: "admin"
-    credential_env: "BMC_PASSWORD_SERVER2"
-
-  # Dell iDRAC9 (14G+, e.g. R640) — HTML5 KVM via WSS, no container needed
+  # Dell iDRAC9 (14th gen+, e.g. R640)
+  # KVM: HTML5 via VNC proxy (port 5901)
+  # IPMI: Web proxy with auto-login via Angular scope injection
   - name: "dell-14g"
     bmc_ip: "10.10.11.194"
-    board_type: "dell_idrac9"    # port defaults to 443
+    board_type: "dell_idrac9"    # port defaults to 443 (HTTPS)
     username: "root"
     credential_env: "BMC_PASSWORD_DELL"
 
-  # Dell iDRAC8 (13G, e.g. R730xd) — VNC KVM on port 5901, no container needed
+  # Dell iDRAC8 (13th gen, e.g. R730xd)
+  # KVM: VNC proxy (port 5901)
+  # IPMI: Web proxy with login page bypass (redirects to dashboard)
   - name: "dell-13g"
     bmc_ip: "10.10.11.92"
-    board_type: "dell_idrac8"    # port defaults to 443
+    board_type: "dell_idrac8"    # port defaults to 443 (HTTPS)
     username: "root"
     credential_env: "BMC_PASSWORD_DELL"
+
+  # Sipeed NanoKVM
+  # KVM: Native web UI proxy (MJPEG/H264 video + WebSocket HID)
+  # The NanoKVM web interface IS the KVM client — no separate IPMI panel
+  - name: "my-nanokvm"
+    bmc_ip: "10.10.11.246"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  # APC UPS with Network Management Card 2
+  # Panel: Web proxy with login bypass (URL-based session tokens)
+  - name: "ups-1"
+    bmc_ip: "10.10.50.226"
+    bmc_port: 80
+    board_type: "apc_ups"
+    username: "apc"
+    credential_env: "APC_PASSWORD"
+
+  # APC PDU with Network Management Card 2 (same board_type as UPS)
+  - name: "pdu-1"
+    bmc_ip: "10.10.11.144"
+    bmc_port: 80
+    board_type: "apc_ups"
+    username: "apc"
+    credential_env: "APC_PASSWORD"
 
 settings:
   # Container runtime: "docker" or "kubernetes"
   runtime: "docker"
 
-  # Container image for KVM sessions (used by both runtimes)
+  # Container image for KVM sessions (AMI MegaRAC only)
   container_image: "kvm-switcher/jviewer:latest"
 
   # Kubernetes settings (only used when runtime is "kubernetes")
@@ -58,6 +85,6 @@ settings:
 #     admin:
 #       servers: ["*"]     # wildcard grants access to all servers
 #     ops-team:
-#       servers: ["server-1", "server-2"]
+#       servers: ["server-1", "dell-14g", "ups-1"]
 #     dev-team:
 #       servers: ["server-1"]
