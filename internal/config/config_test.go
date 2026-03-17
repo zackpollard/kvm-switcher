@@ -354,6 +354,81 @@ oidc:
 	}
 }
 
+func TestLoad_NewSettingsDefaults(t *testing.T) {
+	path := writeTestConfig(t, `
+servers:
+  - name: "srv1"
+    bmc_ip: "10.0.0.1"
+    board_type: "ami_megarac"
+    username: "admin"
+    credential_env: "BMC_PASS"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if len(cfg.Settings.CORSOrigins) != 1 || cfg.Settings.CORSOrigins[0] != "*" {
+		t.Errorf("CORSOrigins = %v, want [*]", cfg.Settings.CORSOrigins)
+	}
+	if cfg.Settings.RateLimitRPM != 60 {
+		t.Errorf("RateLimitRPM = %d, want 60", cfg.Settings.RateLimitRPM)
+	}
+	if cfg.Settings.DBPath != "data/kvm-switcher.db" {
+		t.Errorf("DBPath = %q, want data/kvm-switcher.db", cfg.Settings.DBPath)
+	}
+	if cfg.Settings.AuditLog == nil || !*cfg.Settings.AuditLog {
+		t.Errorf("AuditLog = %v, want true", cfg.Settings.AuditLog)
+	}
+	if cfg.Settings.MetricsEnabled {
+		t.Errorf("MetricsEnabled = %v, want false", cfg.Settings.MetricsEnabled)
+	}
+	if cfg.Settings.BMCCredsTTLMinutes != 120 {
+		t.Errorf("BMCCredsTTLMinutes = %d, want 120", cfg.Settings.BMCCredsTTLMinutes)
+	}
+}
+
+func TestLoad_EnvOverrides(t *testing.T) {
+	path := writeTestConfig(t, `
+servers:
+  - name: "srv1"
+    bmc_ip: "10.0.0.1"
+    board_type: "ami_megarac"
+    username: "admin"
+    credential_env: "BMC_PASS"
+`)
+	t.Setenv("KVM_CORS_ORIGINS", "https://a.com,https://b.com")
+	t.Setenv("KVM_RATE_LIMIT_RPM", "120")
+	t.Setenv("KVM_DB_PATH", "/tmp/test.db")
+	t.Setenv("KVM_AUDIT_LOG", "false")
+	t.Setenv("KVM_METRICS_ENABLED", "true")
+	t.Setenv("KVM_BMC_CREDS_TTL_MINUTES", "30")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if len(cfg.Settings.CORSOrigins) != 2 || cfg.Settings.CORSOrigins[0] != "https://a.com" {
+		t.Errorf("CORSOrigins = %v, want [https://a.com https://b.com]", cfg.Settings.CORSOrigins)
+	}
+	if cfg.Settings.RateLimitRPM != 120 {
+		t.Errorf("RateLimitRPM = %d, want 120", cfg.Settings.RateLimitRPM)
+	}
+	if cfg.Settings.DBPath != "/tmp/test.db" {
+		t.Errorf("DBPath = %q, want /tmp/test.db", cfg.Settings.DBPath)
+	}
+	if cfg.Settings.AuditLog == nil || *cfg.Settings.AuditLog {
+		t.Errorf("AuditLog = %v, want false", cfg.Settings.AuditLog)
+	}
+	if !cfg.Settings.MetricsEnabled {
+		t.Errorf("MetricsEnabled = %v, want true", cfg.Settings.MetricsEnabled)
+	}
+	if cfg.Settings.BMCCredsTTLMinutes != 30 {
+		t.Errorf("BMCCredsTTLMinutes = %d, want 30", cfg.Settings.BMCCredsTTLMinutes)
+	}
+}
+
 func TestGetPassword(t *testing.T) {
 	t.Run("password set", func(t *testing.T) {
 		t.Setenv("TEST_BMC_PASS", "secret123")

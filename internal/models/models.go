@@ -26,6 +26,14 @@ type Settings struct {
 	Runtime               string `yaml:"runtime"`        // "docker" (default) or "kubernetes"
 	KubeNamespace         string `yaml:"kube_namespace"` // default: "kvm-switcher"
 	KubeConfig            string `yaml:"kube_config"`    // path to kubeconfig; empty = in-cluster
+
+	// Production hardening settings
+	CORSOrigins        []string `yaml:"cors_origins"`          // default ["*"]
+	RateLimitRPM       int      `yaml:"rate_limit_rpm"`        // default 60
+	DBPath             string   `yaml:"db_path"`               // default "data/kvm-switcher.db"
+	AuditLog           *bool    `yaml:"audit_log"`             // default true (pointer for nil=default-true)
+	MetricsEnabled     bool     `yaml:"metrics_enabled"`       // default false
+	BMCCredsTTLMinutes int      `yaml:"bmc_creds_ttl_minutes"` // default 120
 }
 
 // OIDCConfig holds optional OIDC authentication settings.
@@ -110,6 +118,12 @@ type KVMConnectInfo struct {
 	TargetURL     string       // For websocket mode (wss://...)
 	TargetAddr    string       // For vnc mode (host:port)
 	VNCPassword   string       // For vnc mode: password for VNC auth
+}
+
+// BMCCredEntry wraps BMCCredentials with metadata for TTL-based cleanup.
+type BMCCredEntry struct {
+	Creds     *BMCCredentials
+	CreatedAt time.Time
 }
 
 // BMCCredentials holds the authentication tokens for a BMC session.
