@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
+	"github.com/zackpollard/kvm-switcher/internal/boards"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
 
@@ -1535,28 +1535,15 @@ func TestIntegration_GitHubVersionCheck(t *testing.T) {
 	t.Cleanup(mockGH.Close)
 
 	// Reset the cache globals
-	nanoKVMLatestMu.Lock()
-	origURL := nanoKVMReleasesURL
-	origApp := nanoKVMLatestApp
-	origImage := nanoKVMLatestImage
-	origCheckTime := nanoKVMLatestCheckTime
-	nanoKVMLatestApp = ""
-	nanoKVMLatestImage = ""
-	nanoKVMLatestCheckTime = time.Time{}
-	nanoKVMReleasesURL = mockGH.URL
-	nanoKVMLatestMu.Unlock()
+	origState := boards.SaveNanoKVMVersionCache()
+	boards.ResetNanoKVMVersionCache(mockGH.URL)
 
 	t.Cleanup(func() {
-		nanoKVMLatestMu.Lock()
-		nanoKVMReleasesURL = origURL
-		nanoKVMLatestApp = origApp
-		nanoKVMLatestImage = origImage
-		nanoKVMLatestCheckTime = origCheckTime
-		nanoKVMLatestMu.Unlock()
+		boards.RestoreNanoKVMVersionCache(origState)
 	})
 
 	// First call → should fetch from mock
-	versions := getNanoKVMLatestVersions()
+	versions := boards.GetNanoKVMLatestVersions()
 	if versions.App != "2.3.6" {
 		t.Errorf("App = %q, want %q (should skip pre-release '3.0.0-beta')", versions.App, "2.3.6")
 	}
@@ -1568,7 +1555,7 @@ func TestIntegration_GitHubVersionCheck(t *testing.T) {
 	}
 
 	// Second call → should use cache (no new request)
-	versions2 := getNanoKVMLatestVersions()
+	versions2 := boards.GetNanoKVMLatestVersions()
 	if versions2.App != "2.3.6" || versions2.Image != "v1.4.2" {
 		t.Errorf("cached versions changed: App=%q Image=%q", versions2.App, versions2.Image)
 	}
@@ -1577,12 +1564,10 @@ func TestIntegration_GitHubVersionCheck(t *testing.T) {
 	}
 
 	// Reset check time to the past to force re-fetch
-	nanoKVMLatestMu.Lock()
-	nanoKVMLatestCheckTime = time.Now().Add(-2 * time.Hour)
-	nanoKVMLatestMu.Unlock()
+	boards.ExpireNanoKVMVersionCache()
 
 	// Third call → cache expired, should fetch again
-	versions3 := getNanoKVMLatestVersions()
+	versions3 := boards.GetNanoKVMLatestVersions()
 	if versions3.App != "2.3.6" || versions3.Image != "v1.4.2" {
 		t.Errorf("refetched versions wrong: App=%q Image=%q", versions3.App, versions3.Image)
 	}

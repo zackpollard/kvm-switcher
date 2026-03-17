@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/zackpollard/kvm-switcher/internal/boards"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
 
@@ -77,19 +78,25 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	// Get or create cached proxy
 	entry := getOrCreateProxy(serverCfg, name)
 
-	// If we have cached credentials, bypass the login page entirely by
-	// redirecting straight to the dashboard. This avoids exposing any
-	// credentials (even dummy ones) to the client.
-	if handled := handleLoginPageBypass(w, r, remainder, entry); handled {
-		return
+	handler, _ := boards.Get(serverCfg.BoardType)
+
+	// If we have cached credentials, bypass the login page entirely
+	if r.Method == http.MethodGet && handler != nil {
+		if creds := entry.getBMCCredentials(); creds != nil {
+			if redirectURL := handler.LoginBypass(remainder, creds); redirectURL != "" {
+				http.Redirect(w, r, redirectURL, http.StatusFound)
+				return
+			}
+		}
 	}
 
-	// Intercept login POST requests and return cached credentials instead
-	// of creating a new BMC session. This is a safety net for cases where
-	// the login page is reached despite the bypass above (e.g., session
-	// timeout re-auth within the dashboard).
-	if handled := handleLoginIntercept(w, r, remainder, entry); handled {
-		return
+	// Intercept login POST requests and return cached credentials
+	if handler != nil {
+		if creds := entry.getBMCCredentials(); creds != nil {
+			if handler.LoginIntercept(w, r, remainder, creds) {
+				return
+			}
+		}
 	}
 
 	// Rewrite the request path to the remainder
@@ -101,150 +108,18 @@ func (s *Server) HandleBMCProxy(w http.ResponseWriter, r *http.Request) {
 	entry.proxy.ServeHTTP(w, r)
 }
 
-// handleLoginPageBypass redirects login/landing pages directly to the dashboard
-// when cached BMC credentials exist. This completely skips the login form, so no
-// credentials (real or dummy) are ever exposed to the browser.
-func handleLoginPageBypass(w http.ResponseWriter, r *http.Request, path string, entry *bmcProxyEntry) bool {
-	if r.Method != http.MethodGet {
-		return false
-	}
-	creds := entry.getBMCCredentials()
-	if creds == nil {
-		return false
-	}
-
-	switch entry.boardType {
-	case "dell_idrac9":
-		// iDRAC9's Angular SPA requires the login API call to set client-side
-		// state, so we can't skip directly to the dashboard. Instead, the SW
-		// replaces the login page with a synthetic page that calls the login
-		// API (intercepted by the proxy) and redirects to the dashboard.
-		// No bypass needed here — handled entirely in the service worker.
-
-	case "dell_idrac8":
-		if path == "/" || path == "/start.html" || path == "/login.html" {
-			st1 := ""
-			if creds.Extra != nil {
-				st1 = creds.Extra["st1"]
-			}
-			redirectURL := fmt.Sprintf("index.html?ST1=%s,ST2=%s", st1, creds.CSRFToken)
-			http.Redirect(w, r, redirectURL, http.StatusFound)
-			log.Printf("BMC proxy: bypassing iDRAC8 login, redirecting to dashboard")
-			return true
-		}
-
-	case "nanokvm":
-		// NanoKVM: the SPA checks for the nano-kvm-token cookie. The proxy
-		// injects it, so the app skips the login page automatically. The SW
-		// also needs the cookie in the browser for the NanoKVM JS to read.
-		// No bypass needed — the proxy handles cookie injection.
-
-	case "apc_ups":
-		// APC NMC2: redirect / and login pages to home.htm (the dashboard).
-		// The proxy's Director adds the NMC session token, so home.htm loads
-		// authenticated without needing to go through the login form.
-		if path == "/" || strings.HasSuffix(path, "/logon.htm") {
-			http.Redirect(w, r, "home.htm", http.StatusFound)
-			log.Printf("BMC proxy: bypassing APC login, redirecting to dashboard")
-			return true
-		}
-	}
-
-	return false
-}
-
-// handleLoginIntercept checks if the request is a BMC login and returns cached
-// credentials instead of forwarding to the BMC. Returns true if handled.
-func handleLoginIntercept(w http.ResponseWriter, r *http.Request, path string, entry *bmcProxyEntry) bool {
-	creds := entry.getBMCCredentials()
-	if creds == nil {
-		return false
-	}
-
-	switch entry.boardType {
-	case "dell_idrac9":
-		// iDRAC9 login: POST /sysmgmt/2015/bmc/session
-		if r.Method == http.MethodPost && path == "/sysmgmt/2015/bmc/session" {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("XSRF-TOKEN", creds.CSRFToken)
-			http.SetCookie(w, &http.Cookie{
-				Name:     "-http-session-",
-				Value:    creds.SessionCookie,
-				Path:     "/",
-				Secure:   true,
-				HttpOnly: true,
-			})
-			w.WriteHeader(http.StatusCreated)
-			fmt.Fprint(w, `{"authResult":0}`)
-			log.Printf("BMC proxy: intercepted iDRAC9 login, returning cached session")
-			return true
-		}
-
-	case "dell_idrac8":
-		// iDRAC8 pre-login logout: the login page POSTs to /data/logout
-		// before submitting credentials (session fixation prevention).
-		// Intercept this to prevent it from invalidating our managed session.
-		if r.Method == http.MethodPost && path == "/data/logout" {
-			w.Header().Set("Content-Type", "text/xml")
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><root><status>ok</status></root>`)
-			log.Printf("BMC proxy: intercepted iDRAC8 pre-login logout, returning fake OK")
-			return true
-		}
-
-		// iDRAC8 login: POST /data/login
-		if r.Method == http.MethodPost && path == "/data/login" {
-			st1 := ""
-			if creds.Extra != nil {
-				st1 = creds.Extra["st1"]
-			}
-			w.Header().Set("Content-Type", "text/xml")
-			http.SetCookie(w, &http.Cookie{
-				Name:     "-http-session-",
-				Value:    creds.SessionCookie,
-				Path:     "/",
-				Secure:   true,
-				HttpOnly: true,
-			})
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?> <root> <status>ok</status> <authResult>0</authResult> <forwardUrl>index.html?ST1=%s,ST2=%s</forwardUrl> </root>`, st1, creds.CSRFToken)
-			log.Printf("BMC proxy: intercepted iDRAC8 login, returning cached session")
-			return true
-		}
-
-	case "ami_megarac", "":
-		// AMI MegaRAC: intercept logout.asp to prevent the managed session
-		// from being invalidated. The SW may trigger a logout on page load
-		// or session refresh — return a fake OK so the session stays alive.
-		if r.Method == http.MethodGet && path == "/rpc/WEBSES/logout.asp" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `{"WEBSES":{"SESSID":"Disconnected"}}`)
-			log.Printf("BMC proxy: intercepted MegaRAC logout, returning fake OK")
-			return true
-		}
-	}
-
-	return false
-}
-
-// bmcScheme returns the URL scheme for a given board type.
-func bmcScheme(boardType string) string {
-	switch boardType {
-	case "dell_idrac8", "dell_idrac9":
-		return "https"
-	default:
-		return "http"
-	}
-}
-
 // getOrCreateProxy returns a cached proxy entry for the given server.
 func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntry {
 	if v, ok := bmcProxies.Load(name); ok {
 		return v.(*bmcProxyEntry)
 	}
 
-	scheme := bmcScheme(serverCfg.BoardType)
+	handler, _ := boards.Get(serverCfg.BoardType)
+
+	scheme := "http"
+	if handler != nil {
+		scheme = handler.Scheme()
+	}
 	bmcOrigin := fmt.Sprintf("%s://%s:%d", scheme, serverCfg.BMCIP, serverCfg.BMCPort)
 	target, _ := url.Parse(bmcOrigin)
 
@@ -253,6 +128,12 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 
 	entry := &bmcProxyEntry{jar: jar, boardType: serverCfg.BoardType}
 
+	// Build the cookie strip list: defaults + board-specific
+	cookieStripList := []string{"kvm_session", "kvm_oauth_state"}
+	if handler != nil {
+		cookieStripList = append(cookieStripList, handler.CookiesToStrip()...)
+	}
+
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
@@ -260,13 +141,12 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			req.Host = target.Host
 
 			// Some BMCs (iDRAC9) require Accept-Encoding to serve static files.
-			// Ensure it's always set so CSS/JS/images load correctly.
 			if req.Header.Get("Accept-Encoding") == "" {
 				req.Header.Set("Accept-Encoding", "gzip, deflate")
 			}
 
 			// Strip our auth cookies and browser-side BMC cookies
-			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie", "-http-session-", "nano-kvm-token")
+			filterCookies(req, cookieStripList...)
 
 			// Add stored BMC cookies from the jar
 			for _, c := range jar.Cookies(req.URL) {
@@ -274,28 +154,9 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			}
 
 			// Inject pre-authenticated BMC credentials (board-type-specific)
-			if creds := entry.getBMCCredentials(); creds != nil {
-				injectBMCCredentials(req, entry.boardType, creds)
-
-				// APC NMC2: session auth is URL-based. Prepend the NMC
-				// session path to every request. If the path already has
-				// /NMC/{token}/ (from absolute URLs in the HTML), strip
-				// the old token and replace with the current one.
-				if entry.boardType == "apc_ups" {
-					if nmcPath := creds.Extra["nmc_path"]; nmcPath != "" {
-						p := req.URL.Path
-						if strings.HasPrefix(p, "/NMC/") {
-							// /NMC/{old_token}/rest → /rest
-							if idx := strings.Index(p[5:], "/"); idx >= 0 {
-								p = p[5+idx:]
-							}
-						}
-						req.URL.Path = nmcPath + p
-						if req.URL.RawPath != "" {
-							req.URL.RawPath = nmcPath + p
-						}
-					}
-				}
+			if creds := entry.getBMCCredentials(); creds != nil && handler != nil {
+				handler.InjectCredentials(req, creds)
+				handler.RewriteRequestURL(req, creds)
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
@@ -307,33 +168,14 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			// Rewrite Location header so redirects stay through the proxy
 			if loc := resp.Header.Get("Location"); loc != "" {
 				rewritten := rewriteLocationForBMC(loc, bmcOrigin, name)
-				// APC NMC2: strip /NMC/{token}/ from rewritten paths so the
-				// client sees clean paths (the proxy re-adds the token on
-				// the next request via the Director).
-				if entry.boardType == "apc_ups" {
-					prefix := "/__bmc/" + name
-					after := strings.TrimPrefix(rewritten, prefix)
-					if strings.HasPrefix(after, "/NMC/") {
-						if idx := strings.Index(after[5:], "/"); idx >= 0 {
-							rewritten = prefix + after[5+idx:]
-						} else {
-							rewritten = prefix + "/"
-						}
-					}
+				if handler != nil {
+					rewritten = handler.RewriteLocationHeader(rewritten, "/__bmc/"+name)
 				}
 				resp.Header.Set("Location", rewritten)
 			}
 
-			// iDRAC8 sets Content-Type: application/x-gzip on some responses
-			// (typically 302 redirects). Fix to the correct MIME type.
-			if resp.Header.Get("Content-Type") == "application/x-gzip" {
-				resp.Header.Set("Content-Type", inferContentType(resp.Request.URL.Path))
-			}
-
 			// Decompress gzip responses at the proxy level so the service
-			// worker receives plain content. This avoids browser-specific
-			// differences in how SWs handle Content-Encoding (Firefox may
-			// not transparently decompress in SW fetch, causing downloads).
+			// worker receives plain content.
 			if resp.Header.Get("Content-Encoding") == "gzip" {
 				if reader, err := gzip.NewReader(resp.Body); err == nil {
 					decompressed, readErr := io.ReadAll(reader)
@@ -347,30 +189,15 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 				}
 			}
 
-			// iDRAC8 serves .jsesp (embedded JS) files as text/html. Chrome's strict
-			// MIME type checking blocks script execution for non-JS Content-Types.
-			if strings.HasSuffix(resp.Request.URL.Path, ".jsesp") {
-				resp.Header.Set("Content-Type", "application/javascript")
-			}
-
-			// iDRAC8 firmware omits the X_Language header on /session API
-			// responses. The login page JS reads this header to determine the
-			// locale and silently fails (null.substring throws in a try/catch),
-			// preventing loadLocale() from ever being called and leaving the
-			// login form hidden. Inject the header so the page renders.
-			if serverCfg.BoardType == "dell_idrac8" && resp.Header.Get("X_Language") == "" {
-				resp.Header.Set("X_Language", "en")
+			// Board-type-specific response modifications (always applied)
+			creds := entry.getBMCCredentials()
+			if handler != nil {
+				handler.ModifyProxyResponse(resp, creds)
 			}
 
 			// Signal to the service worker that auto-login is available.
-			// The SW uses this to inject auto-submit scripts into login pages.
-			if creds := entry.getBMCCredentials(); creds != nil {
+			if creds != nil {
 				resp.Header.Set("X-KVM-AutoLogin", "true")
-				// NanoKVM: pass the JWT token so the SW can set it as a
-				// browser cookie (the NanoKVM SPA reads it from document.cookie)
-				if entry.boardType == "nanokvm" && creds.SessionCookie != "" {
-					resp.Header.Set("X-KVM-NanoToken", creds.SessionCookie)
-				}
 			}
 
 			// Remove headers that block framing/embedding or trigger downloads
@@ -391,43 +218,6 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 	entry.proxy = proxy
 	actual, _ := bmcProxies.LoadOrStore(name, entry)
 	return actual.(*bmcProxyEntry)
-}
-
-// injectBMCCredentials adds board-type-specific auth to an outgoing proxy request.
-func injectBMCCredentials(req *http.Request, boardType string, creds *models.BMCCredentials) {
-	switch boardType {
-	case "dell_idrac9":
-		// iDRAC9: -http-session- cookie + XSRF-TOKEN header
-		req.AddCookie(&http.Cookie{Name: "-http-session-", Value: creds.SessionCookie})
-		if creds.CSRFToken != "" {
-			req.Header.Set("XSRF-TOKEN", creds.CSRFToken)
-		}
-
-	case "dell_idrac8":
-		// iDRAC8: -http-session- cookie + ST2 header.
-		// ST1 is NOT injected here — it's a URL parameter managed by the
-		// browser-side JS after login. Injecting it server-side corrupts
-		// query strings on unauthenticated API calls.
-		req.AddCookie(&http.Cookie{Name: "-http-session-", Value: creds.SessionCookie})
-		if creds.CSRFToken != "" {
-			req.Header.Set("ST2", creds.CSRFToken)
-		}
-
-	case "apc_ups":
-		// APC NMC2: auth is URL-based (session token in path). No cookies
-		// or headers needed — the Director prepends the NMC session path.
-
-	case "nanokvm":
-		// NanoKVM: JWT token in nano-kvm-token cookie
-		req.AddCookie(&http.Cookie{Name: "nano-kvm-token", Value: creds.SessionCookie})
-
-	default:
-		// AMI MegaRAC: SessionCookie cookie + CSRFTOKEN header
-		req.AddCookie(&http.Cookie{Name: "SessionCookie", Value: creds.SessionCookie})
-		if creds.CSRFToken != "" {
-			req.Header.Set("CSRFTOKEN", creds.CSRFToken)
-		}
-	}
 }
 
 // rewriteLocationForBMC converts BMC Location headers to /__bmc/{name}/... paths.
@@ -460,28 +250,7 @@ func rewriteLocationForBMC(loc, bmcOrigin, name string) string {
 // inferContentType returns a MIME type based on the URL path extension.
 // Used when the BMC sends a generic Content-Type like application/x-gzip.
 func inferContentType(path string) string {
-	switch {
-	case strings.HasSuffix(path, ".html"), strings.HasSuffix(path, ".htm"):
-		return "text/html"
-	case strings.HasSuffix(path, ".js"), strings.HasSuffix(path, ".jsesp"):
-		return "application/javascript"
-	case strings.HasSuffix(path, ".css"):
-		return "text/css"
-	case strings.HasSuffix(path, ".json"):
-		return "application/json"
-	case strings.HasSuffix(path, ".png"):
-		return "image/png"
-	case strings.HasSuffix(path, ".gif"):
-		return "image/gif"
-	case strings.HasSuffix(path, ".jpg"), strings.HasSuffix(path, ".jpeg"):
-		return "image/jpeg"
-	case strings.HasSuffix(path, ".svg"):
-		return "image/svg+xml"
-	case strings.HasSuffix(path, ".xml"):
-		return "text/xml"
-	default:
-		return "text/html"
-	}
+	return boards.InferContentType(path)
 }
 
 // filterCookies removes named cookies from the outgoing request.

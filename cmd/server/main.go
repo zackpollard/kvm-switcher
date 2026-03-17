@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/zackpollard/kvm-switcher/internal/api"
-	_ "github.com/zackpollard/kvm-switcher/internal/auth" // Register authenticators
+	_ "github.com/zackpollard/kvm-switcher/internal/auth"   // Register authenticators
+	_ "github.com/zackpollard/kvm-switcher/internal/boards" // Register board handlers
 	"github.com/zackpollard/kvm-switcher/internal/config"
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"

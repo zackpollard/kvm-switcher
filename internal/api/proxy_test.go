@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/zackpollard/kvm-switcher/internal/boards" // Register board handlers
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
 
