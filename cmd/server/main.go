@@ -17,6 +17,7 @@ import (
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"
 	k8smgr "github.com/zackpollard/kvm-switcher/internal/kubernetes"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
@@ -97,6 +98,12 @@ func main() {
 	// Set up routes
 	mux := http.NewServeMux()
 
+	// Prometheus metrics endpoint (unauthenticated, when enabled)
+	if cfg.Settings.MetricsEnabled {
+		mux.Handle("GET /metrics", promhttp.Handler())
+		log.Println("Prometheus metrics enabled at /metrics")
+	}
+
 	// Health/readiness probes (unauthenticated)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -175,7 +182,11 @@ func main() {
 	}
 
 	// Add CORS middleware
-	handler := middleware.CORSMiddleware(cfg.Settings.CORSOrigins)(mux)
+	var handler http.Handler = mux
+	if cfg.Settings.MetricsEnabled {
+		handler = middleware.MetricsMiddleware()(handler)
+	}
+	handler = middleware.CORSMiddleware(cfg.Settings.CORSOrigins)(handler)
 
 	// Create HTTP server
 	httpServer := &http.Server{

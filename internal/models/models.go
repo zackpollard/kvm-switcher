@@ -260,18 +260,19 @@ type AuditLogger interface {
 
 // DeviceStatus holds polled status information for a single device.
 type DeviceStatus struct {
-	Online       bool    `json:"online"`
-	PowerState   string  `json:"power_state,omitempty"`    // "on", "off", ""
-	Model        string  `json:"model,omitempty"`
-	Health       string  `json:"health,omitempty"`          // "ok", "warning", "critical", ""
-	LoadWatts    float64 `json:"load_watts,omitempty"`
-	LoadPct      float64 `json:"load_pct,omitempty"`       // UPS: percentage of rated capacity
-	LoadAmps     float64 `json:"load_amps,omitempty"`
-	Voltage      float64 `json:"voltage,omitempty"`
-	BatteryPct   float64 `json:"battery_pct,omitempty"`
-	RuntimeMin   float64 `json:"runtime_min,omitempty"`
-	TemperatureC float64 `json:"temperature_c,omitempty"`
-	AppVersion   string  `json:"app_version,omitempty"`     // NanoKVM: application version
-	ImageVersion string  `json:"image_version,omitempty"`   // NanoKVM: firmware image version
-	UpdateAvail  bool    `json:"update_available,omitempty"` // NanoKVM: firmware update available
+	Online              bool    `json:"online"`
+	PowerState          string  `json:"power_state,omitempty"`           // "on", "off", ""
+	Model               string  `json:"model,omitempty"`
+	Health              string  `json:"health,omitempty"`                 // "ok", "warning", "critical", ""
+	LoadWatts           float64 `json:"load_watts,omitempty"`
+	LoadPct             float64 `json:"load_pct,omitempty"`              // UPS: percentage of rated capacity
+	LoadAmps            float64 `json:"load_amps,omitempty"`
+	Voltage             float64 `json:"voltage,omitempty"`
+	BatteryPct          float64 `json:"battery_pct,omitempty"`
+	RuntimeMin          float64 `json:"runtime_min,omitempty"`
+	TemperatureC        float64 `json:"temperature_c,omitempty"`
+	AppVersion          string  `json:"app_version,omitempty"`            // NanoKVM: application version
+	ImageVersion        string  `json:"image_version,omitempty"`          // NanoKVM: firmware image version
+	UpdateAvail         bool    `json:"update_available,omitempty"`       // NanoKVM: firmware update available
+	CircuitBreakerState string  `json:"circuit_breaker_state,omitempty"` // "closed", "open", "half-open"
 }
