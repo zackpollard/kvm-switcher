@@ -133,6 +133,12 @@ func handleLoginPageBypass(w http.ResponseWriter, r *http.Request, path string, 
 			return true
 		}
 
+	case "nanokvm":
+		// NanoKVM: the SPA checks for the nano-kvm-token cookie. The proxy
+		// injects it, so the app skips the login page automatically. The SW
+		// also needs the cookie in the browser for the NanoKVM JS to read.
+		// No bypass needed — the proxy handles cookie injection.
+
 	case "apc_ups":
 		// APC NMC2: redirect / and login pages to home.htm (the dashboard).
 		// The proxy's Director adds the NMC session token, so home.htm loads
@@ -248,7 +254,7 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			}
 
 			// Strip our auth cookies and browser-side BMC cookies
-			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie", "-http-session-")
+			filterCookies(req, "kvm_session", "kvm_oauth_state", "SessionCookie", "-http-session-", "nano-kvm-token")
 
 			// Add stored BMC cookies from the jar
 			for _, c := range jar.Cookies(req.URL) {
@@ -346,8 +352,13 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 
 			// Signal to the service worker that auto-login is available.
 			// The SW uses this to inject auto-submit scripts into login pages.
-			if entry.getBMCCredentials() != nil {
+			if creds := entry.getBMCCredentials(); creds != nil {
 				resp.Header.Set("X-KVM-AutoLogin", "true")
+				// NanoKVM: pass the JWT token so the SW can set it as a
+				// browser cookie (the NanoKVM SPA reads it from document.cookie)
+				if entry.boardType == "nanokvm" && creds.SessionCookie != "" {
+					resp.Header.Set("X-KVM-NanoToken", creds.SessionCookie)
+				}
 			}
 
 			// Remove headers that block framing/embedding or trigger downloads
@@ -393,6 +404,10 @@ func injectBMCCredentials(req *http.Request, boardType string, creds *models.BMC
 	case "apc_ups":
 		// APC NMC2: auth is URL-based (session token in path). No cookies
 		// or headers needed — the Director prepends the NMC session path.
+
+	case "nanokvm":
+		// NanoKVM: JWT token in nano-kvm-token cookie
+		req.AddCookie(&http.Cookie{Name: "nano-kvm-token", Value: creds.SessionCookie})
 
 	default:
 		// AMI MegaRAC: SessionCookie cookie + CSRFTOKEN header
