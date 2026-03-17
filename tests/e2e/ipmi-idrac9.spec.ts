@@ -96,6 +96,12 @@ test.describe('iDRAC9 IPMI', () => {
     const ipmiPage = await navigateToIPMI(context, SERVER);
     await waitForDashboard(ipmiPage, 'Dashboard', 60000);
 
+    // Wait for the Angular SPA to populate system info (async API calls)
+    await ipmiPage.waitForFunction(
+      () => (document.body.innerText || '').includes('PowerEdge'),
+      { timeout: 60000 }
+    );
+
     const dashboard = await ipmiPage.evaluate(() => ({
       title: document.title,
       bodyText: document.body.innerText || '',

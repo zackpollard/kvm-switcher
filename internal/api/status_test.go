@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/zackpollard/kvm-switcher/internal/boards"
+	_ "github.com/zackpollard/kvm-switcher/internal/boards" // Register board handlers
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
 
@@ -327,6 +329,16 @@ func newMockMegaRAC(t *testing.T, powerState string, model string, cpuTempMillid
 	return httptest.NewServer(mux)
 }
 
+func fetchBoardStatus(t *testing.T, boardType string, host string, port int, creds *models.BMCCredentials) *DeviceStatus {
+	t.Helper()
+	handler, ok := boards.Get(boardType)
+	if !ok {
+		t.Fatalf("no board handler for %q", boardType)
+	}
+	cfg := &models.ServerConfig{BMCIP: host, BMCPort: port, BoardType: boardType}
+	return handler.FetchStatus(cfg, creds)
+}
+
 func TestFetchMegaRACStatus_PowerOn(t *testing.T) {
 	srv := newMockMegaRAC(t, "1", "SuperServer X11", "36000")
 	defer srv.Close()
@@ -337,7 +349,7 @@ func TestFetchMegaRACStatus_PowerOn(t *testing.T) {
 		CSRFToken:     "test-csrf",
 	}
 
-	status := fetchMegaRACStatus(host, port, creds)
+	status := fetchBoardStatus(t, "ami_megarac", host, port, creds)
 
 	if !status.Online {
 		t.Error("expected Online=true")
@@ -363,7 +375,7 @@ func TestFetchMegaRACStatus_PowerOff(t *testing.T) {
 		CSRFToken:     "test-csrf",
 	}
 
-	status := fetchMegaRACStatus(host, port, creds)
+	status := fetchBoardStatus(t, "ami_megarac", host, port, creds)
 
 	if !status.Online {
 		t.Error("expected Online=true")
@@ -380,7 +392,7 @@ func TestFetchMegaRACStatus_Unreachable(t *testing.T) {
 	}
 
 	// Use an address that will immediately refuse connection
-	status := fetchMegaRACStatus("127.0.0.1", 1, creds)
+	status := fetchBoardStatus(t, "ami_megarac", "127.0.0.1", 1, creds)
 
 	if status.Online {
 		t.Error("expected Online=false for unreachable host")
@@ -438,7 +450,7 @@ func TestFetchNanoKVMStatus_Success(t *testing.T) {
 		SessionCookie: "test-nano-token",
 	}
 
-	status := fetchNanoKVMStatus(host, port, creds)
+	status := fetchBoardStatus(t, "nanokvm", host, port, creds)
 
 	if !status.Online {
 		t.Error("expected Online=true")
@@ -466,7 +478,7 @@ func TestFetchNanoKVMStatus_PowerOff(t *testing.T) {
 		SessionCookie: "test-nano-token",
 	}
 
-	status := fetchNanoKVMStatus(host, port, creds)
+	status := fetchBoardStatus(t, "nanokvm", host, port, creds)
 
 	if !status.Online {
 		t.Error("expected Online=true")
@@ -526,7 +538,7 @@ func TestFetchAPCStatus_PDU(t *testing.T) {
 		Extra: map[string]string{"nmc_path": nmcPath},
 	}
 
-	status := fetchAPCStatus(host, port, creds)
+	status := fetchBoardStatus(t, "apc_ups", host, port, creds)
 
 	if !status.Online {
 		t.Error("expected Online=true")
@@ -591,7 +603,7 @@ func TestFetchAPCStatus_UPS(t *testing.T) {
 		Extra: map[string]string{"nmc_path": nmcPath},
 	}
 
-	status := fetchAPCStatus(host, port, creds)
+	status := fetchBoardStatus(t, "apc_ups", host, port, creds)
 
 	if !status.Online {
 		t.Error("expected Online=true")
