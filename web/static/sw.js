@@ -3,6 +3,7 @@
 
 const clientServerMap = new Map(); // clientId -> serverName
 const knownServers = new Set(); // server names confirmed via navigation
+const nanoKVMServers = new Set(); // server names that are NanoKVM devices
 
 // Last known server name — used as fallback when clientId and Referer
 // both fail (e.g., after BMC JS navigates the top frame to "/index.html").
@@ -42,8 +43,20 @@ self.addEventListener('fetch', (event) => {
 
 	const path = url.pathname;
 
-	// Passthrough: app traffic and internal proxy path
-	if (isAppRoute(path)) return;
+	// Passthrough: app traffic and internal proxy path.
+	// Exception: /api/* and /ws/* requests from NanoKVM pages need to be
+	// proxied to the NanoKVM device (its SPA uses absolute /api/ paths
+	// that would otherwise hit our server's own API).
+	if (isAppRoute(path)) {
+		if (path.startsWith('/api/') || path.startsWith('/ws/')) {
+			const clientName = event.clientId ? clientServerMap.get(event.clientId) : null;
+			if (clientName && nanoKVMServers.has(clientName)) {
+				event.respondWith(proxyToBMC(event.request, clientName, path + url.search));
+				return;
+			}
+		}
+		return;
+	}
 
 	// /ipmi/{name}/... -> extract name, track client, rewrite to /__bmc/{name}/...
 	const name = extractServerName(path);
@@ -233,7 +246,18 @@ async function proxyToBMC(request, name, path) {
 		if (request.mode === 'navigate' && resp.headers.get('x-kvm-autologin') === 'true') {
 			const ct = (resp.headers.get('content-type') || '').toLowerCase();
 			if (ct.includes('text/html')) {
-				const html = await resp.text();
+				let html = await resp.text();
+
+				// NanoKVM: inject the JWT token as a browser cookie so the
+				// NanoKVM SPA's client-side JS finds it in document.cookie.
+				// Also mark this server as NanoKVM so /api/* requests from
+				// its pages get proxied instead of hitting our server's API.
+				const nanoToken = resp.headers.get('x-kvm-nanotoken');
+				if (nanoToken) {
+					nanoKVMServers.add(name);
+					html = html.replace('<head>', '<head><script>document.cookie="nano-kvm-token=' + nanoToken + ';path=/";</script>');
+				}
+
 				body = injectAutoLoginScript(html, path);
 			}
 		}

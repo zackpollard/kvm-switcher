@@ -14,9 +14,17 @@
 			navigator.serviceWorker
 				.register('/sw.js', { scope: '/', updateViaCache: 'none' })
 				.then((reg) => {
-					// Check for updates on every page load
 					reg.update();
 				});
+
+			// Reload when a new SW takes control (e.g., after server rebuild)
+			let reloading = false;
+			navigator.serviceWorker.addEventListener('controllerchange', () => {
+				if (!reloading) {
+					reloading = true;
+					window.location.reload();
+				}
+			});
 		}
 	});
 </script>
