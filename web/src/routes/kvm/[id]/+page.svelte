@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { getSession, deleteSession, createSession, getKVMWebSocketURL, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
+	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 
 	let session: KVMSession | null = $state(null);
 	let activeSessionId = $state(page.params.id);
@@ -90,10 +91,10 @@
 		const _id = activeSessionId;
 		loadSession();
 		const interval = setInterval(async () => {
-			if (session?.status === 'starting') {
+			if (session?.status === 'starting' || session?.status === 'connected') {
 				await loadSession();
 			}
-		}, 2000);
+		}, session?.status === 'starting' ? 2000 : 30000);
 		return () => clearInterval(interval);
 	});
 
@@ -159,6 +160,14 @@
 			</button>
 		</div>
 	</div>
+
+	<!-- Session Timeout Warning -->
+	{#if session?.status === 'connected' && session.idle_timeout_remaining_seconds != null}
+		<SessionTimeoutWarning
+			sessionId={activeSessionId}
+			remainingSeconds={session.idle_timeout_remaining_seconds}
+		/>
+	{/if}
 
 	<!-- KVM Viewer Area -->
 	<div bind:this={viewerContainer} class="relative flex-1 bg-black">

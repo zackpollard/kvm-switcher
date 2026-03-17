@@ -18,6 +18,7 @@ export interface KVMSession {
 	created_at: string;
 	last_activity: string;
 	error?: string;
+	idle_timeout_remaining_seconds?: number;
 }
 
 const API_BASE = '/api';
@@ -45,6 +46,11 @@ export async function getSession(id: string): Promise<KVMSession> {
 	const res = await fetch(`${API_BASE}/sessions/${id}`);
 	if (!res.ok) throw new Error(`Failed to get session: ${res.statusText}`);
 	return res.json();
+}
+
+export async function keepAliveSession(id: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${id}/keepalive`, { method: 'PATCH' });
+	if (!res.ok) throw new Error(`Failed to keep alive session: ${res.statusText}`);
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -96,6 +102,7 @@ export interface DeviceStatus {
 	app_version?: string;
 	image_version?: string;
 	update_available?: boolean;
+	circuit_breaker_state?: string;
 }
 
 export async function fetchServerStatuses(): Promise<Record<string, DeviceStatus>> {

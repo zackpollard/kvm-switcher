@@ -146,6 +146,7 @@ func main() {
 		mux.Handle("POST /api/sessions", rateLimited(http.HandlerFunc(srv.CreateSession)))
 		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
 		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
+		mux.HandleFunc("PATCH /api/sessions/{id}/keepalive", srv.KeepAliveSession)
 		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
 		mux.Handle("POST /api/ipmi-session/{name}", rateLimited(http.HandlerFunc(srv.CreateIPMISession)))
 		mux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
