@@ -58,6 +58,90 @@ servers:
     username: "apc"
     credential_env: "APC_PASSWORD"
 
+  - name: "nanokvm-130"
+    bmc_ip: "10.10.11.130"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "geodude-kvm"
+    bmc_ip: "10.10.11.246"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "magikarp-kvm"
+    bmc_ip: "10.10.11.73"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "eevee-kvm"
+    bmc_ip: "10.10.11.128"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "nanokvm-158"
+    bmc_ip: "10.10.11.158"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "charmander-kvm"
+    bmc_ip: "10.10.11.11"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "flareon-kvm"
+    bmc_ip: "10.10.11.26"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "nanokvm-15"
+    bmc_ip: "10.10.11.15"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "futomacoss-kvm"
+    bmc_ip: "10.10.11.119"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "pikachu-kvm"
+    bmc_ip: "10.10.11.165"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "sylveon-kvm"
+    bmc_ip: "10.10.11.106"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
+  - name: "squirtle-kvm"
+    bmc_ip: "10.10.11.33"
+    bmc_port: 80
+    board_type: "nanokvm"
+    username: "admin"
+    credential_env: "NANOKVM_PASSWORD"
+
   - name: "ups-2"
     bmc_ip: "10.10.11.243"
     bmc_port: 80

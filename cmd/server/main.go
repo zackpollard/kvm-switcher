@@ -100,6 +100,8 @@ func main() {
 		apiMux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
 		apiMux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
 		apiMux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
+		apiMux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
+		apiMux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
 		apiMux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
 		apiMux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
 
@@ -115,6 +117,8 @@ func main() {
 		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
 		mux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
 		mux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
+		mux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
+		mux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
 		mux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
 	}

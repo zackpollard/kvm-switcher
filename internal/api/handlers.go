@@ -466,6 +466,98 @@ func StartSessionManager(servers []models.ServerConfig, sc *StatusCache) {
 	}()
 }
 
+// HandleNanoKVMWebSocket proxies WebSocket connections from the NanoKVM SPA
+// to the actual NanoKVM device. The NanoKVM SPA connects to /api/ws (HID) and
+// /api/stream/h264 (video) using absolute paths. The Go server identifies
+// which NanoKVM to proxy to using the nano-kvm-token cookie.
+func (s *Server) HandleNanoKVMWebSocket(w http.ResponseWriter, r *http.Request) {
+	// Find which NanoKVM this token belongs to
+	token := ""
+	if c, err := r.Cookie("nano-kvm-token"); err == nil {
+		token = c.Value
+	}
+	if token == "" {
+		log.Printf("NanoKVM WS: no nano-kvm-token cookie in request for %s", r.URL.Path)
+		http.Error(w, "missing nano-kvm-token", http.StatusUnauthorized)
+		return
+	}
+	log.Printf("NanoKVM WS: proxying %s (token: %s...)", r.URL.Path, token[:20])
+
+	// Find the NanoKVM server that has this token
+	var targetCfg *models.ServerConfig
+	entries := GetAllProxyEntries()
+	for _, cfg := range s.Config.Servers {
+		if cfg.BoardType != "nanokvm" {
+			continue
+		}
+		if entry, ok := entries[cfg.Name]; ok {
+			if creds := entry.getBMCCredentials(); creds != nil && creds.SessionCookie == token {
+				targetCfg = &cfg
+				break
+			}
+		}
+	}
+	if targetCfg == nil {
+		http.Error(w, "unknown NanoKVM token", http.StatusUnauthorized)
+		return
+	}
+
+	// Build target WebSocket URL
+	targetURL := fmt.Sprintf("ws://%s:%d%s", targetCfg.BMCIP, targetCfg.BMCPort, r.URL.Path)
+	if targetCfg.BMCPort == 0 {
+		targetURL = fmt.Sprintf("ws://%s%s", targetCfg.BMCIP, r.URL.Path)
+	}
+
+	// Connect to the NanoKVM
+	dialer := websocket.Dialer{}
+	header := http.Header{}
+	header.Set("Cookie", "nano-kvm-token="+token)
+	targetConn, _, err := dialer.Dial(targetURL, header)
+	if err != nil {
+		log.Printf("NanoKVM WS proxy: failed to connect to %s: %v", targetURL, err)
+		http.Error(w, "failed to connect to NanoKVM", http.StatusBadGateway)
+		return
+	}
+	defer targetConn.Close()
+
+	// Upgrade the client connection
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	clientConn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("NanoKVM WS proxy: upgrade failed: %v", err)
+		return
+	}
+	defer clientConn.Close()
+
+	// Bidirectional proxy
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			msgType, msg, err := targetConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := clientConn.WriteMessage(msgType, msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	for {
+		msgType, msg, err := clientConn.ReadMessage()
+		if err != nil {
+			break
+		}
+		if err := targetConn.WriteMessage(msgType, msg); err != nil {
+			break
+		}
+	}
+	<-done
+}
+
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
