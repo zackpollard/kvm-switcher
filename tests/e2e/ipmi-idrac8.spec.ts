@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { registerServiceWorker, createIPMISession, navigateToIPMI } from './helpers';
+import { registerServiceWorker, createIPMISession, navigateToIPMI, waitForDashboard } from './helpers';
 
 /**
  * Dell iDRAC8 IPMI web interface integration tests.
@@ -22,8 +22,8 @@ test.describe('iDRAC8 IPMI', () => {
     expect(session.board_type).toBe('dell_idrac8');
     expect(session.session_cookie).toBeTruthy();
 
-    // Navigate and wait — auto-login should happen automatically
-    const ipmiPage = await navigateToIPMI(context, SERVER, 30000);
+    const ipmiPage = await navigateToIPMI(context, SERVER);
+    await waitForDashboard(ipmiPage, 'iDRAC', 60000);
 
     const state = await ipmiPage.evaluate(() => ({
       title: document.title,
@@ -49,9 +49,7 @@ test.describe('iDRAC8 IPMI', () => {
       hasLoginForm: !!document.querySelector('input[name="user"]'),
     }));
 
-    // With login bypass, should never see the login form
     expect(state.hasLoginForm).toBe(false);
-    // Should be on dashboard (index.html) or in redirect transition
     expect(state.url.includes('index.html') || state.url.includes('ipmi/')).toBe(true);
   });
 
@@ -91,7 +89,7 @@ test.describe('iDRAC8 IPMI', () => {
     expect(logoutResp.status).toBe(200);
     expect(logoutResp.body).toContain('<status>ok</status>');
 
-    // Session should still work
+    // Session should still work after intercepted logout
     const sessionResp = await page.evaluate(async (server: string) => {
       const res = await fetch(`/__bmc/${server}/session?aimGetIntProp=scl_int_enabled`);
       return { status: res.status, xLanguage: res.headers.get('x_language') };
