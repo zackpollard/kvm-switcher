@@ -119,12 +119,26 @@ The dashboard is available at `http://localhost:8080`.
 ### Development mode
 
 ```bash
-# Terminal 1: Frontend with hot reload
-make dev-frontend
+# Full dev environment: builds JViewer image, starts Prometheus + Grafana, runs backend with metrics
+make dev
 
-# Terminal 2: Backend
-make dev-backend
+# Or run components individually:
+make dev-frontend    # SvelteKit dev server with hot reload (Terminal 1)
+make dev-backend     # Go backend without metrics stack (Terminal 2)
+make dev-stack       # Start Prometheus + Grafana only
+make dev-stack-down  # Stop Prometheus + Grafana
 ```
+
+When using `make dev`, the following services are available:
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| KVM Switcher | http://localhost:8080 | — |
+| Prometheus | http://localhost:9090 | — |
+| Grafana | http://localhost:3001 | admin/admin (or anonymous) |
+| Grafana Dashboard | http://localhost:3001/d/kvm-switcher | — |
+
+The Grafana dashboard includes panels for HTTP request rate, latency percentiles, error rate, active sessions, rate limit rejections, and per-server BMC online status.
 
 ## Configuration
 
