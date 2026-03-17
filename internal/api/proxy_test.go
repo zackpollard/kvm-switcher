@@ -72,7 +72,7 @@ func newTestBMCServer(t *testing.T, bmc *httptest.Server) *Server {
 	// Clear cached proxy from previous tests
 	bmcProxies.Delete("test-bmc")
 
-	return NewServer(cfg, &mockContainerManager{})
+	return newServerCore(cfg, &mockContainerManager{})
 }
 
 func TestHandleBMCProxy_BasicRequest(t *testing.T) {
@@ -118,7 +118,7 @@ func TestHandleBMCProxy_UnknownServer(t *testing.T) {
 		Servers:  []models.ServerConfig{},
 		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
 	}
-	srv := NewServer(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg, &mockContainerManager{})
 
 	req := httptest.NewRequest("GET", "/__bmc/nonexistent/", nil)
 	w := httptest.NewRecorder()
@@ -314,7 +314,7 @@ func newTestDellServer(t *testing.T, bmc *httptest.Server, boardType string) *Se
 	}
 
 	bmcProxies.Delete(name)
-	return NewServer(cfg, &mockContainerManager{})
+	return newServerCore(cfg, &mockContainerManager{})
 }
 
 func TestHandleBMCProxy_IDRAC8_XLanguageInjection(t *testing.T) {
@@ -580,5 +580,438 @@ func TestRewriteLocationForBMC(t *testing.T) {
 				t.Errorf("rewriteLocationForBMC(%q) = %q, want %q", tt.loc, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- NanoKVM proxy tests ---
+
+func newNanoKVMMock(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	// Echo cookies back as JSON
+	mux.HandleFunc("GET /api/check-cookies", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		cookies := make(map[string]string)
+		for _, c := range r.Cookies() {
+			cookies[c.Name] = c.Value
+		}
+		json.NewEncoder(w).Encode(cookies)
+	})
+
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>NanoKVM</body></html>`)
+	})
+
+	return httptest.NewServer(mux)
+}
+
+func newTestNanoKVMServer(t *testing.T, bmc *httptest.Server) *Server {
+	t.Helper()
+	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
+	port := 80
+	fmt.Sscanf(portStr, "%d", &port)
+
+	name := "test-nanokvm"
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: name, BMCIP: host, BMCPort: port, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+
+	bmcProxies.Delete(name)
+	return newServerCore(cfg, &mockContainerManager{})
+}
+
+func TestHandleBMCProxy_NanoKVM_CredentialInjection(t *testing.T) {
+	bmc := newNanoKVMMock(t)
+	defer bmc.Close()
+	srv := newTestNanoKVMServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-nanokvm")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "nano-jwt-token-abc123",
+	})
+
+	req := httptest.NewRequest("GET", "/__bmc/test-nanokvm/api/check-cookies", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var cookies map[string]string
+	json.NewDecoder(w.Body).Decode(&cookies)
+
+	if cookies["nano-kvm-token"] != "nano-jwt-token-abc123" {
+		t.Errorf("nano-kvm-token cookie = %q, want %q", cookies["nano-kvm-token"], "nano-jwt-token-abc123")
+	}
+}
+
+func TestHandleBMCProxy_NanoKVM_AutoLoginHeaders(t *testing.T) {
+	bmc := newNanoKVMMock(t)
+	defer bmc.Close()
+	srv := newTestNanoKVMServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-nanokvm")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "nano-jwt-xyz",
+	})
+
+	req := httptest.NewRequest("GET", "/__bmc/test-nanokvm/", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	if w.Header().Get("X-KVM-AutoLogin") != "true" {
+		t.Errorf("X-KVM-AutoLogin = %q, want %q", w.Header().Get("X-KVM-AutoLogin"), "true")
+	}
+	if w.Header().Get("X-KVM-NanoToken") != "nano-jwt-xyz" {
+		t.Errorf("X-KVM-NanoToken = %q, want %q", w.Header().Get("X-KVM-NanoToken"), "nano-jwt-xyz")
+	}
+}
+
+func TestHandleBMCProxy_NanoKVM_CookieStripped(t *testing.T) {
+	bmc := newNanoKVMMock(t)
+	defer bmc.Close()
+	srv := newTestNanoKVMServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-nanokvm")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "server-side-token",
+	})
+
+	req := httptest.NewRequest("GET", "/__bmc/test-nanokvm/api/check-cookies", nil)
+	// Browser sends its own nano-kvm-token cookie — should be stripped by
+	// filterCookies before the proxy adds the server-side one.
+	req.AddCookie(&http.Cookie{Name: "nano-kvm-token", Value: "stale-browser-token"})
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var cookies map[string]string
+	json.NewDecoder(w.Body).Decode(&cookies)
+
+	// The BMC should only see the server-side token, not the stale browser one.
+	if cookies["nano-kvm-token"] != "server-side-token" {
+		t.Errorf("nano-kvm-token = %q, want %q (browser cookie should be stripped)", cookies["nano-kvm-token"], "server-side-token")
+	}
+}
+
+// --- APC UPS proxy tests ---
+
+func newAPCMock(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+
+	// Echo the request path back as JSON
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
+	})
+
+	// Echo cookies back as JSON
+	mux.HandleFunc("GET /api/check-cookies", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		cookies := make(map[string]string)
+		for _, c := range r.Cookies() {
+			cookies[c.Name] = c.Value
+		}
+		json.NewEncoder(w).Encode(cookies)
+	})
+
+	// Handler that returns a Location redirect with NMC token in the path
+	mux.HandleFunc("GET /NMC/tok/redirect-test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/NMC/tok/somepage.htm")
+		w.WriteHeader(http.StatusFound)
+	})
+
+	return httptest.NewServer(mux)
+}
+
+func newTestAPCServer(t *testing.T, bmc *httptest.Server) *Server {
+	t.Helper()
+	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
+	port := 80
+	fmt.Sscanf(portStr, "%d", &port)
+
+	name := "test-apc"
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: name, BMCIP: host, BMCPort: port, BoardType: "apc_ups", Username: "apc", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+
+	bmcProxies.Delete(name)
+	return newServerCore(cfg, &mockContainerManager{})
+}
+
+func TestHandleBMCProxy_APC_LoginBypass_Root(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-apc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "unused",
+		Extra:         map[string]string{"nmc_path": "/NMC/tok"},
+	})
+
+	// Use a real test server to capture redirect behavior
+	ts := httptest.NewServer(http.HandlerFunc(srv.HandleBMCProxy))
+	defer ts.Close()
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	resp, err := client.Get(ts.URL + "/__bmc/test-apc/")
+	if err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	// http.Redirect resolves relative "home.htm" against the request path,
+	// so the client sees the full proxied path.
+	if !strings.HasSuffix(loc, "/home.htm") {
+		t.Errorf("Location = %q, want suffix %q", loc, "/home.htm")
+	}
+}
+
+func TestHandleBMCProxy_APC_LoginBypass_LogonPage(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-apc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "unused",
+		Extra:         map[string]string{"nmc_path": "/NMC/tok"},
+	})
+
+	ts := httptest.NewServer(http.HandlerFunc(srv.HandleBMCProxy))
+	defer ts.Close()
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	resp, err := client.Get(ts.URL + "/__bmc/test-apc/logon.htm")
+	if err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Errorf("status = %d, want 302", resp.StatusCode)
+	}
+	loc := resp.Header.Get("Location")
+	// http.Redirect resolves relative "home.htm" against the request path,
+	// so the client sees the full proxied path.
+	if !strings.HasSuffix(loc, "/home.htm") {
+		t.Errorf("Location = %q, want suffix %q", loc, "/home.htm")
+	}
+}
+
+func TestHandleBMCProxy_APC_NoBypassWithoutCreds(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	// No credentials — request should pass through to mock
+	req := httptest.NewRequest("GET", "/__bmc/test-apc/", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (passthrough to mock)", w.Code)
+	}
+
+	// Mock returns JSON with path
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result["path"] != "/" {
+		t.Errorf("path = %q, want %q (should pass through unmodified)", result["path"], "/")
+	}
+}
+
+func TestHandleBMCProxy_APC_URLRewriting(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-apc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "unused",
+		Extra:         map[string]string{"nmc_path": "/NMC/tok"},
+	})
+
+	// Request /home.htm — the Director should prepend /NMC/tok
+	req := httptest.NewRequest("GET", "/__bmc/test-apc/home.htm", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result["path"] != "/NMC/tok/home.htm" {
+		t.Errorf("path = %q, want %q", result["path"], "/NMC/tok/home.htm")
+	}
+}
+
+func TestHandleBMCProxy_APC_URLRewriting_StripOldToken(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-apc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "unused",
+		Extra:         map[string]string{"nmc_path": "/NMC/tok"},
+	})
+
+	// Request with old NMC token in path — should be replaced with current token
+	req := httptest.NewRequest("GET", "/__bmc/test-apc/NMC/oldtok/page.htm", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var result map[string]string
+	json.NewDecoder(w.Body).Decode(&result)
+
+	if result["path"] != "/NMC/tok/page.htm" {
+		t.Errorf("path = %q, want %q (old token should be replaced)", result["path"], "/NMC/tok/page.htm")
+	}
+}
+
+func TestHandleBMCProxy_APC_LocationRewrite(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-apc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "unused",
+		Extra:         map[string]string{"nmc_path": "/NMC/tok"},
+	})
+
+	// Use a real test server so redirect headers are properly handled
+	ts := httptest.NewServer(http.HandlerFunc(srv.HandleBMCProxy))
+	defer ts.Close()
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	resp, err := client.Get(ts.URL + "/__bmc/test-apc/redirect-test")
+	if err != nil {
+		t.Fatalf("request error: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+
+	loc := resp.Header.Get("Location")
+	// The NMC token should be stripped from the Location header so the
+	// client sees a clean path (the proxy re-adds it on the next request).
+	want := "/__bmc/test-apc/somepage.htm"
+	if loc != want {
+		t.Errorf("Location = %q, want %q", loc, want)
+	}
+}
+
+func TestHandleBMCProxy_APC_NoCookieInjection(t *testing.T) {
+	bmc := newAPCMock(t)
+	defer bmc.Close()
+	srv := newTestAPCServer(t, bmc)
+
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-apc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "should-not-appear",
+		CSRFToken:     "also-should-not-appear",
+		Extra:         map[string]string{"nmc_path": "/NMC/tok"},
+	})
+
+	// The APC NMC check-cookies endpoint — should have no auth cookies
+	// because APC uses URL-based auth, not cookies.
+	req := httptest.NewRequest("GET", "/__bmc/test-apc/api/check-cookies", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var cookies map[string]string
+	json.NewDecoder(w.Body).Decode(&cookies)
+
+	// APC auth is URL-based only — no SessionCookie, CSRFTOKEN, or other
+	// auth cookies should be injected.
+	if v, ok := cookies["SessionCookie"]; ok {
+		t.Errorf("SessionCookie should not be present, got %q", v)
+	}
+	if v, ok := cookies["nano-kvm-token"]; ok {
+		t.Errorf("nano-kvm-token should not be present, got %q", v)
+	}
+	if v, ok := cookies["-http-session-"]; ok {
+		t.Errorf("-http-session- should not be present, got %q", v)
+	}
+}
+
+// --- AMI MegaRAC logout intercept test ---
+
+func TestHandleBMCProxy_MegaRAC_LogoutIntercept(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	// Inject cached credentials
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-bmc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "megarac-session-123",
+		CSRFToken:     "megarac-csrf-456",
+	})
+
+	// GET /rpc/WEBSES/logout.asp should be intercepted — not forwarded to BMC
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/rpc/WEBSES/logout.asp", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Disconnected") {
+		t.Errorf("expected fake disconnect response, got: %s", body)
+	}
+
+	// Credentials should still be cached (not invalidated)
+	if creds := entry.getBMCCredentials(); creds == nil || creds.SessionCookie != "megarac-session-123" {
+		t.Error("credentials should still be cached after intercepted logout")
 	}
 }
