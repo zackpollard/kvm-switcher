@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
@@ -973,5 +974,619 @@ func TestIntegration_AutoLoginHeader_NoCreds(t *testing.T) {
 	// X-KVM-AutoLogin should NOT be present
 	if v := w.Header().Get("X-KVM-AutoLogin"); v != "" {
 		t.Errorf("X-KVM-AutoLogin = %q, want empty (no credentials set)", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 11. TestIntegration_IDRAC9_SessionThenProxy
+// ---------------------------------------------------------------------------
+
+func TestIntegration_IDRAC9_SessionThenProxy(t *testing.T) {
+	const serverName = "int-idrac9"
+
+	var deleteHit atomic.Int32
+
+	mux := http.NewServeMux()
+
+	// POST /sysmgmt/2015/bmc/session → 201 with session cookie and XSRF-TOKEN
+	mux.HandleFunc("POST /sysmgmt/2015/bmc/session", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("XSRF-TOKEN", "idrac9-xsrf-integ")
+		http.SetCookie(w, &http.Cookie{Name: "-http-session-", Value: "idrac9-sess-integ"})
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"authResult":0}`)
+	})
+
+	// DELETE /sysmgmt/2015/bmc/session → 200 (for old session cleanup)
+	mux.HandleFunc("DELETE /sysmgmt/2015/bmc/session", func(w http.ResponseWriter, r *http.Request) {
+		deleteHit.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// GET /check → echo received -http-session- cookie and XSRF-TOKEN header
+	mux.HandleFunc("GET /check", func(w http.ResponseWriter, r *http.Request) {
+		sessionCookie := ""
+		for _, c := range r.Cookies() {
+			if c.Name == "-http-session-" {
+				sessionCookie = c.Value
+			}
+		}
+		xsrf := r.Header.Get("XSRF-TOKEN")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"session_cookie":%q,"xsrf_token":%q}`, sessionCookie, xsrf)
+	})
+
+	// GET / → returns HTML (verify passthrough, no login bypass for iDRAC9)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>iDRAC9 Dashboard</body></html>`)
+	})
+
+	bmc := httptest.NewTLSServer(mux)
+	t.Cleanup(bmc.Close)
+
+	u, err := url.Parse(bmc.URL)
+	if err != nil {
+		t.Fatalf("failed to parse BMC URL: %v", err)
+	}
+	host := u.Hostname()
+	port := 443
+	if p := u.Port(); p != "" {
+		fmt.Sscanf(p, "%d", &port)
+	}
+
+	t.Setenv("INTEG_IDRAC9_PASS", "testpass")
+
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "dell_idrac9", Username: "root", CredentialEnv: "INTEG_IDRAC9_PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+	srv := newServerCore(cfg, &mockContainerManager{})
+
+	// --- Step 1: CreateIPMISession ---
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
+	apiServer := httptest.NewServer(apiMux)
+	t.Cleanup(apiServer.Close)
+
+	resp, err := http.Post(apiServer.URL+"/api/ipmi-session/"+serverName, "application/json", nil)
+	if err != nil {
+		t.Fatalf("CreateIPMISession request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("CreateIPMISession status = %d, want 200; body: %s", resp.StatusCode, body)
+	}
+
+	var sessResp map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&sessResp); err != nil {
+		t.Fatalf("failed to decode session response: %v", err)
+	}
+	if sessResp["session_cookie"] != "idrac9-sess-integ" {
+		t.Errorf("session_cookie = %q, want %q", sessResp["session_cookie"], "idrac9-sess-integ")
+	}
+	if sessResp["csrf_token"] != "idrac9-xsrf-integ" {
+		t.Errorf("csrf_token = %q, want %q", sessResp["csrf_token"], "idrac9-xsrf-integ")
+	}
+
+	// --- Step 2: POST /sysmgmt/2015/bmc/session through proxy → verify intercepted ---
+	proxyTS := httptest.NewServer(http.HandlerFunc(srv.HandleBMCProxy))
+	t.Cleanup(proxyTS.Close)
+
+	noRedirectClient := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	loginReq, err := http.NewRequest("POST", proxyTS.URL+"/__bmc/"+serverName+"/sysmgmt/2015/bmc/session",
+		strings.NewReader(`{"UserName":"root","Password":"test"}`))
+	if err != nil {
+		t.Fatalf("failed to create login request: %v", err)
+	}
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginResp, err := noRedirectClient.Do(loginReq)
+	if err != nil {
+		t.Fatalf("proxy login request failed: %v", err)
+	}
+	loginBody, _ := io.ReadAll(loginResp.Body)
+	loginResp.Body.Close()
+
+	if loginResp.StatusCode != http.StatusCreated {
+		t.Fatalf("proxy login status = %d, want 201; body: %s", loginResp.StatusCode, loginBody)
+	}
+	if string(loginBody) != `{"authResult":0}` {
+		t.Errorf("login body = %q, want %q", string(loginBody), `{"authResult":0}`)
+	}
+	if xsrf := loginResp.Header.Get("XSRF-TOKEN"); xsrf != "idrac9-xsrf-integ" {
+		t.Errorf("XSRF-TOKEN = %q, want %q", xsrf, "idrac9-xsrf-integ")
+	}
+
+	// --- Step 3: GET /check through proxy → verify creds injected ---
+	req := httptest.NewRequest("GET", "/__bmc/"+serverName+"/check", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("proxy check status = %d, want 200", w.Code)
+	}
+	var checkResult map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&checkResult); err != nil {
+		t.Fatalf("failed to decode check response: %v", err)
+	}
+	if checkResult["session_cookie"] != "idrac9-sess-integ" {
+		t.Errorf("injected session_cookie = %q, want %q", checkResult["session_cookie"], "idrac9-sess-integ")
+	}
+	if checkResult["xsrf_token"] != "idrac9-xsrf-integ" {
+		t.Errorf("injected xsrf_token = %q, want %q", checkResult["xsrf_token"], "idrac9-xsrf-integ")
+	}
+
+	// --- Step 4: GET / through proxy → verify NOT redirected (iDRAC9 has no login bypass) ---
+	rootResp, err := noRedirectClient.Get(proxyTS.URL + "/__bmc/" + serverName + "/")
+	if err != nil {
+		t.Fatalf("proxy root request failed: %v", err)
+	}
+	rootBody, _ := io.ReadAll(rootResp.Body)
+	rootResp.Body.Close()
+
+	if rootResp.StatusCode != http.StatusOK {
+		t.Fatalf("proxy root status = %d, want 200 (no redirect for iDRAC9)", rootResp.StatusCode)
+	}
+	if !strings.Contains(string(rootBody), "iDRAC9 Dashboard") {
+		t.Errorf("root body should contain 'iDRAC9 Dashboard', got: %s", rootBody)
+	}
+
+	// Verify X-KVM-AutoLogin header
+	if rootResp.Header.Get("X-KVM-AutoLogin") != "true" {
+		t.Errorf("X-KVM-AutoLogin = %q, want %q", rootResp.Header.Get("X-KVM-AutoLogin"), "true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 12. TestIntegration_SessionManager_RenewsStaleSession
+// ---------------------------------------------------------------------------
+
+func TestIntegration_SessionManager_RenewsStaleSession(t *testing.T) {
+	const serverName = "int-mgr-renew"
+
+	var loginCount atomic.Int32
+
+	mux := http.NewServeMux()
+
+	// POST /rpc/WEBSES/create.asp → AMI session response, counting calls
+	mux.HandleFunc("POST /rpc/WEBSES/create.asp", func(w http.ResponseWriter, r *http.Request) {
+		loginCount.Add(1)
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `{ 'SESSION_COOKIE' : 'new-sess-%d' , 'BMC_IP_ADDR' : '127.0.0.1' , 'CSRFTOKEN' : 'new-csrf-%d' , HAPI_STATUS:0 }`, loginCount.Load(), loginCount.Load())
+	})
+
+	// GET /rpc/getrole.asp → role info
+	mux.HandleFunc("GET /rpc/getrole.asp", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `{ 'CURUSERNAME' : 'admin' , 'CURPRIV' : 4 , 'EXTENDED_PRIV' : 255 , HAPI_STATUS:0 }`)
+	})
+
+	// GET /rpc/WEBSES/logout.asp → ok
+	mux.HandleFunc("GET /rpc/WEBSES/logout.asp", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"WEBSES":{"SESSID":"LoggedOut"}}`)
+	})
+
+	bmc := httptest.NewServer(mux)
+	t.Cleanup(bmc.Close)
+
+	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
+	port := 80
+	fmt.Sscanf(portStr, "%d", &port)
+
+	t.Setenv("INTEG_MGR_RENEW_PASS", "testpass")
+
+	servers := []models.ServerConfig{
+		{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "INTEG_MGR_RENEW_PASS"},
+	}
+
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+
+	sc := NewStatusCache()
+
+	// Pre-populate proxy entry with "old" credentials
+	entry := getOrCreateProxy(&servers[0], serverName)
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "old-sess",
+		CSRFToken:     "old-csrf",
+	})
+
+	// Pre-populate StatusCache with Online: true but PowerState: "" (stale)
+	sc.Set(serverName, &DeviceStatus{Online: true, PowerState: ""})
+
+	// Replicate createAll logic from StartSessionManager (without goroutines)
+	for i := range servers {
+		cfg := &servers[i]
+		e := getOrCreateProxy(cfg, cfg.Name)
+		if creds := e.getBMCCredentials(); creds != nil {
+			if cfg.BoardType == "dell_idrac8" {
+				continue
+			}
+			if st, ok := sc.Get(cfg.Name); ok && st.Online && st.PowerState != "" {
+				continue // session is working
+			}
+		}
+		if _, err := ensureBMCSession(cfg); err != nil {
+			t.Fatalf("ensureBMCSession failed: %v", err)
+		}
+	}
+
+	// Verify the mock received a new login request
+	if loginCount.Load() != 1 {
+		t.Errorf("login count = %d, want 1 (stale session should be renewed)", loginCount.Load())
+	}
+
+	// Verify the proxy entry has NEW credentials
+	creds := entry.getBMCCredentials()
+	if creds == nil {
+		t.Fatal("expected BMC credentials after renewal")
+	}
+	if creds.SessionCookie == "old-sess" {
+		t.Error("session cookie should be renewed, still has 'old-sess'")
+	}
+	if !strings.HasPrefix(creds.SessionCookie, "new-sess-") {
+		t.Errorf("session cookie = %q, want prefix 'new-sess-'", creds.SessionCookie)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 13. TestIntegration_SessionManager_SkipsHealthySession
+// ---------------------------------------------------------------------------
+
+func TestIntegration_SessionManager_SkipsHealthySession(t *testing.T) {
+	const serverName = "int-mgr-skip"
+
+	var loginCount atomic.Int32
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("POST /rpc/WEBSES/create.asp", func(w http.ResponseWriter, r *http.Request) {
+		loginCount.Add(1)
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `{ 'SESSION_COOKIE' : 'should-not-appear' , 'BMC_IP_ADDR' : '127.0.0.1' , 'CSRFTOKEN' : 'should-not-appear' , HAPI_STATUS:0 }`)
+	})
+
+	mux.HandleFunc("GET /rpc/getrole.asp", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `{ 'CURUSERNAME' : 'admin' , 'CURPRIV' : 4 , 'EXTENDED_PRIV' : 255 , HAPI_STATUS:0 }`)
+	})
+
+	bmc := httptest.NewServer(mux)
+	t.Cleanup(bmc.Close)
+
+	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
+	port := 80
+	fmt.Sscanf(portStr, "%d", &port)
+
+	t.Setenv("INTEG_MGR_SKIP_PASS", "testpass")
+
+	servers := []models.ServerConfig{
+		{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "INTEG_MGR_SKIP_PASS"},
+	}
+
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+
+	sc := NewStatusCache()
+
+	// Pre-populate proxy entry with existing credentials
+	entry := getOrCreateProxy(&servers[0], serverName)
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "healthy-sess",
+		CSRFToken:     "healthy-csrf",
+	})
+
+	// Pre-populate StatusCache with Online: true, PowerState: "on" (healthy)
+	sc.Set(serverName, &DeviceStatus{Online: true, PowerState: "on"})
+
+	// Replicate createAll logic from StartSessionManager (without goroutines)
+	for i := range servers {
+		cfg := &servers[i]
+		e := getOrCreateProxy(cfg, cfg.Name)
+		if creds := e.getBMCCredentials(); creds != nil {
+			if cfg.BoardType == "dell_idrac8" {
+				continue
+			}
+			if st, ok := sc.Get(cfg.Name); ok && st.Online && st.PowerState != "" {
+				continue // session is working
+			}
+		}
+		if _, err := ensureBMCSession(cfg); err != nil {
+			t.Fatalf("ensureBMCSession failed: %v", err)
+		}
+	}
+
+	// Verify the mock received ZERO login requests (session was healthy)
+	if loginCount.Load() != 0 {
+		t.Errorf("login count = %d, want 0 (healthy session should be skipped)", loginCount.Load())
+	}
+
+	// Verify proxy entry still has original credentials
+	creds := entry.getBMCCredentials()
+	if creds == nil {
+		t.Fatal("expected BMC credentials to still exist")
+	}
+	if creds.SessionCookie != "healthy-sess" {
+		t.Errorf("session cookie = %q, want %q (should be unchanged)", creds.SessionCookie, "healthy-sess")
+	}
+	if creds.CSRFToken != "healthy-csrf" {
+		t.Errorf("csrf token = %q, want %q (should be unchanged)", creds.CSRFToken, "healthy-csrf")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 14. TestIntegration_NanoKVMWebSocket_MissingToken
+// ---------------------------------------------------------------------------
+
+func TestIntegration_NanoKVMWebSocket_MissingToken(t *testing.T) {
+	const serverName = "int-nanokvm-ws-notoken"
+
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: serverName, BMCIP: "127.0.0.1", BMCPort: 80, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+	srv := newServerCore(cfg, &mockContainerManager{})
+
+	// Send a regular HTTP request with NO cookie
+	req := httptest.NewRequest("GET", "/api/ws", nil)
+	w := httptest.NewRecorder()
+	srv.HandleNanoKVMWebSocket(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "missing nano-kvm-token") {
+		t.Errorf("body = %q, want to contain 'missing nano-kvm-token'", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 15. TestIntegration_NanoKVMWebSocket_InvalidToken
+// ---------------------------------------------------------------------------
+
+func TestIntegration_NanoKVMWebSocket_InvalidToken(t *testing.T) {
+	const serverName = "int-nanokvm-ws-badtoken"
+
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: serverName, BMCIP: "127.0.0.1", BMCPort: 80, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+	srv := newServerCore(cfg, &mockContainerManager{})
+
+	// Create a session so credentials exist
+	entry := getOrCreateProxy(&cfg.Servers[0], serverName)
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "real-nano-token-12345678901234567890",
+	})
+
+	// Send request with wrong token
+	req := httptest.NewRequest("GET", "/api/ws", nil)
+	req.AddCookie(&http.Cookie{Name: "nano-kvm-token", Value: "wrong-token-value-padded-to-20chars"})
+	w := httptest.NewRecorder()
+	srv.HandleNanoKVMWebSocket(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "unknown NanoKVM token") {
+		t.Errorf("body = %q, want to contain 'unknown NanoKVM token'", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 16. TestIntegration_NanoKVMWebSocket_ValidToken
+// ---------------------------------------------------------------------------
+
+func TestIntegration_NanoKVMWebSocket_ValidToken(t *testing.T) {
+	const serverName = "int-nanokvm-ws-ok"
+
+	// Create a mock NanoKVM server that is NOT a WebSocket server
+	nanoMux := http.NewServeMux()
+	nanoMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, "not a websocket server")
+	})
+	nanoBMC := httptest.NewServer(nanoMux)
+	t.Cleanup(nanoBMC.Close)
+
+	host, portStr, _ := strings.Cut(strings.TrimPrefix(nanoBMC.URL, "http://"), ":")
+	port := 80
+	fmt.Sscanf(portStr, "%d", &port)
+
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+	srv := newServerCore(cfg, &mockContainerManager{})
+
+	// Set up credentials with the real token
+	realToken := "valid-nano-token-01234567890"
+	entry := getOrCreateProxy(&cfg.Servers[0], serverName)
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: realToken,
+	})
+
+	// Send a request with the correct token
+	// Since the mock is not a WS server, the handler should attempt to dial and fail with 502
+	req := httptest.NewRequest("GET", "/api/ws", nil)
+	req.AddCookie(&http.Cookie{Name: "nano-kvm-token", Value: realToken})
+	w := httptest.NewRecorder()
+	srv.HandleNanoKVMWebSocket(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (token lookup succeeded but WS dial should fail)", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "failed to connect") {
+		t.Errorf("body = %q, want to contain 'failed to connect'", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 17. TestIntegration_APC_LocationRewrite_StripNMCToken
+// ---------------------------------------------------------------------------
+
+func TestIntegration_APC_LocationRewrite_StripNMCToken(t *testing.T) {
+	const serverName = "int-apc-loc"
+
+	mux := http.NewServeMux()
+
+	// Handler that returns a 302 with Location containing the NMC token
+	mux.HandleFunc("GET /NMC/auth456/somepage.htm", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "/NMC/auth456/otherpage.htm")
+		w.WriteHeader(http.StatusFound)
+	})
+
+	bmc := httptest.NewServer(mux)
+	t.Cleanup(bmc.Close)
+
+	host, portStr, _ := strings.Cut(strings.TrimPrefix(bmc.URL, "http://"), ":")
+	port := 80
+	fmt.Sscanf(portStr, "%d", &port)
+
+	cfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "apc_ups", Username: "apc", CredentialEnv: "PASS"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+	}
+	bmcProxies.Delete(serverName)
+	t.Cleanup(func() { bmcProxies.Delete(serverName) })
+	srv := newServerCore(cfg, &mockContainerManager{})
+
+	// Set up credentials with nmc_path
+	entry := getOrCreateProxy(&cfg.Servers[0], serverName)
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "unused",
+		Extra:         map[string]string{"nmc_path": "/NMC/auth456"},
+	})
+
+	// Use a real test server to properly handle redirects
+	proxyTS := httptest.NewServer(http.HandlerFunc(srv.HandleBMCProxy))
+	t.Cleanup(proxyTS.Close)
+
+	noRedirectClient := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	// Request /somepage.htm — proxy prepends /NMC/auth456, gets 302 with /NMC/auth456/otherpage.htm
+	resp, err := noRedirectClient.Get(proxyTS.URL + "/__bmc/" + serverName + "/somepage.htm")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want 302", resp.StatusCode)
+	}
+
+	loc := resp.Header.Get("Location")
+	// The NMC token should be stripped from the Location header
+	want := "/__bmc/" + serverName + "/otherpage.htm"
+	if loc != want {
+		t.Errorf("Location = %q, want %q (NMC token should be stripped)", loc, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 18. TestIntegration_GitHubVersionCheck
+// ---------------------------------------------------------------------------
+
+func TestIntegration_GitHubVersionCheck(t *testing.T) {
+	var requestCount atomic.Int32
+
+	// Mock GitHub API server returning release data
+	mockGH := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[
+			{"tag_name": "3.0.0-beta", "prerelease": true, "draft": false},
+			{"tag_name": "v2.0.0", "prerelease": false, "draft": true},
+			{"tag_name": "2.3.6", "prerelease": false, "draft": false},
+			{"tag_name": "v1.4.2", "prerelease": false, "draft": false},
+			{"tag_name": "2.3.5", "prerelease": false, "draft": false},
+			{"tag_name": "v1.4.0", "prerelease": false, "draft": false}
+		]`)
+	}))
+	t.Cleanup(mockGH.Close)
+
+	// Reset the cache globals
+	nanoKVMLatestMu.Lock()
+	origURL := nanoKVMReleasesURL
+	origApp := nanoKVMLatestApp
+	origImage := nanoKVMLatestImage
+	origCheckTime := nanoKVMLatestCheckTime
+	nanoKVMLatestApp = ""
+	nanoKVMLatestImage = ""
+	nanoKVMLatestCheckTime = time.Time{}
+	nanoKVMReleasesURL = mockGH.URL
+	nanoKVMLatestMu.Unlock()
+
+	t.Cleanup(func() {
+		nanoKVMLatestMu.Lock()
+		nanoKVMReleasesURL = origURL
+		nanoKVMLatestApp = origApp
+		nanoKVMLatestImage = origImage
+		nanoKVMLatestCheckTime = origCheckTime
+		nanoKVMLatestMu.Unlock()
+	})
+
+	// First call → should fetch from mock
+	versions := getNanoKVMLatestVersions()
+	if versions.App != "2.3.6" {
+		t.Errorf("App = %q, want %q (should skip pre-release '3.0.0-beta')", versions.App, "2.3.6")
+	}
+	if versions.Image != "v1.4.2" {
+		t.Errorf("Image = %q, want %q (should skip draft 'v2.0.0')", versions.Image, "v1.4.2")
+	}
+	if requestCount.Load() != 1 {
+		t.Errorf("request count = %d, want 1", requestCount.Load())
+	}
+
+	// Second call → should use cache (no new request)
+	versions2 := getNanoKVMLatestVersions()
+	if versions2.App != "2.3.6" || versions2.Image != "v1.4.2" {
+		t.Errorf("cached versions changed: App=%q Image=%q", versions2.App, versions2.Image)
+	}
+	if requestCount.Load() != 1 {
+		t.Errorf("request count = %d, want 1 (should use cache)", requestCount.Load())
+	}
+
+	// Reset check time to the past to force re-fetch
+	nanoKVMLatestMu.Lock()
+	nanoKVMLatestCheckTime = time.Now().Add(-2 * time.Hour)
+	nanoKVMLatestMu.Unlock()
+
+	// Third call → cache expired, should fetch again
+	versions3 := getNanoKVMLatestVersions()
+	if versions3.App != "2.3.6" || versions3.Image != "v1.4.2" {
+		t.Errorf("refetched versions wrong: App=%q Image=%q", versions3.App, versions3.Image)
+	}
+	if requestCount.Load() != 2 {
+		t.Errorf("request count = %d, want 2 (cache should have expired)", requestCount.Load())
 	}
 }

@@ -591,6 +591,7 @@ var (
 	nanoKVMLatestImage     string // e.g. "v1.4.2" (tags with v prefix)
 	nanoKVMLatestCheckTime time.Time
 	nanoKVMLatestMu        sync.Mutex
+	nanoKVMReleasesURL     = "https://api.github.com/repos/sipeed/NanoKVM/releases?per_page=20"
 )
 
 type nanoKVMVersions struct {
@@ -610,7 +611,7 @@ func getNanoKVMLatestVersions() nanoKVMVersions {
 	}
 
 	client := newStatusHTTPClient(5*time.Second, false)
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/sipeed/NanoKVM/releases?per_page=20", nil)
+	req, err := http.NewRequest("GET", nanoKVMReleasesURL, nil)
 	if err != nil {
 		return nanoKVMVersions{App: nanoKVMLatestApp, Image: nanoKVMLatestImage}
 	}
