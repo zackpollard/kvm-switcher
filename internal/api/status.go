@@ -30,6 +30,9 @@ type DeviceStatus struct {
 	BatteryPct   float64 `json:"battery_pct,omitempty"`
 	RuntimeMin   float64 `json:"runtime_min,omitempty"`
 	TemperatureC float64 `json:"temperature_c,omitempty"`
+	AppVersion   string  `json:"app_version,omitempty"`    // NanoKVM: application version
+	ImageVersion string  `json:"image_version,omitempty"`  // NanoKVM: firmware image version
+	UpdateAvail  bool    `json:"update_available,omitempty"`// NanoKVM: firmware update available
 }
 
 // StatusCache stores device status per server with thread-safe access.
@@ -582,6 +585,141 @@ func fetchAPCStatus(bmcIP string, bmcPort int, creds *models.BMCCredentials) *De
 	return status
 }
 
+// Cached latest NanoKVM release versions from GitHub.
+var (
+	nanoKVMLatestApp       string // e.g. "2.3.6" (tags without v prefix)
+	nanoKVMLatestImage     string // e.g. "v1.4.2" (tags with v prefix)
+	nanoKVMLatestCheckTime time.Time
+	nanoKVMLatestMu        sync.Mutex
+)
+
+type nanoKVMVersions struct {
+	App   string // latest app version (e.g. "2.3.6")
+	Image string // latest image version (e.g. "v1.4.2")
+}
+
+// getNanoKVMLatestVersions returns the latest NanoKVM app and image versions
+// from GitHub releases, cached for 1 hour.
+// App releases are tagged like "2.3.6", image releases like "v1.4.2".
+func getNanoKVMLatestVersions() nanoKVMVersions {
+	nanoKVMLatestMu.Lock()
+	defer nanoKVMLatestMu.Unlock()
+
+	if time.Since(nanoKVMLatestCheckTime) < time.Hour && nanoKVMLatestApp != "" {
+		return nanoKVMVersions{App: nanoKVMLatestApp, Image: nanoKVMLatestImage}
+	}
+
+	client := newStatusHTTPClient(5*time.Second, false)
+	req, err := http.NewRequest("GET", "https://api.github.com/repos/sipeed/NanoKVM/releases?per_page=20", nil)
+	if err != nil {
+		return nanoKVMVersions{App: nanoKVMLatestApp, Image: nanoKVMLatestImage}
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nanoKVMVersions{App: nanoKVMLatestApp, Image: nanoKVMLatestImage}
+	}
+	defer resp.Body.Close()
+
+	var releases []struct {
+		TagName    string `json:"tag_name"`
+		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nanoKVMVersions{App: nanoKVMLatestApp, Image: nanoKVMLatestImage}
+	}
+
+	for _, r := range releases {
+		if r.Prerelease || r.Draft {
+			continue
+		}
+		if strings.HasPrefix(r.TagName, "v") && nanoKVMLatestImage == "" {
+			nanoKVMLatestImage = r.TagName
+		} else if !strings.HasPrefix(r.TagName, "v") && nanoKVMLatestApp == "" {
+			nanoKVMLatestApp = r.TagName
+		}
+		if nanoKVMLatestApp != "" && nanoKVMLatestImage != "" {
+			break
+		}
+	}
+
+	nanoKVMLatestCheckTime = time.Now()
+	log.Printf("NanoKVM latest versions: app=%s image=%s", nanoKVMLatestApp, nanoKVMLatestImage)
+
+	return nanoKVMVersions{App: nanoKVMLatestApp, Image: nanoKVMLatestImage}
+}
+
+// fetchNanoKVMStatus fetches status from a Sipeed NanoKVM device.
+func fetchNanoKVMStatus(bmcIP string, bmcPort int, creds *models.BMCCredentials) *DeviceStatus {
+	status := &DeviceStatus{Online: true, Model: "NanoKVM"}
+	client := newStatusHTTPClient(5*time.Second, false)
+
+	baseURL := bmcBaseURL("nanokvm", bmcIP, bmcPort)
+
+	makeReq := func(url string) (*http.Request, error) {
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.AddCookie(&http.Cookie{Name: "nano-kvm-token", Value: creds.SessionCookie})
+		return req, nil
+	}
+
+	// Device info
+	if req, err := makeReq(baseURL + "/api/vm/info"); err == nil {
+		if resp, err := client.Do(req); err == nil {
+			var infoResp struct {
+				Code int `json:"code"`
+				Data struct {
+					MDNS        string `json:"mdns"`
+					Image       string `json:"image"`
+					Application string `json:"application"`
+				} `json:"data"`
+			}
+			json.NewDecoder(resp.Body).Decode(&infoResp)
+			resp.Body.Close()
+			if infoResp.Code == 0 {
+				status.Model = "NanoKVM"
+				if infoResp.Data.Application != "" {
+					status.AppVersion = "v" + infoResp.Data.Application
+				}
+				if infoResp.Data.Image != "" {
+					status.ImageVersion = infoResp.Data.Image
+				}
+				latest := getNanoKVMLatestVersions()
+				if latest.App != "" && infoResp.Data.Application != latest.App {
+					status.UpdateAvail = true
+				}
+			}
+		}
+	}
+
+	// GPIO state (power LED = host power state)
+	if req, err := makeReq(baseURL + "/api/vm/gpio"); err == nil {
+		if resp, err := client.Do(req); err == nil {
+			var gpioResp struct {
+				Code int `json:"code"`
+				Data struct {
+					Pwr bool `json:"pwr"`
+				} `json:"data"`
+			}
+			json.NewDecoder(resp.Body).Decode(&gpioResp)
+			resp.Body.Close()
+			if gpioResp.Code == 0 {
+				if gpioResp.Data.Pwr {
+					status.PowerState = "on"
+				} else {
+					status.PowerState = "off"
+				}
+			}
+		}
+	}
+
+	return status
+}
+
 // checkDeviceOnline performs a simple HTTP HEAD request to see if a BMC is reachable.
 func checkDeviceOnline(bmcIP string, bmcPort int, boardType string) bool {
 	url := bmcBaseURL(boardType, bmcIP, bmcPort) + "/"
@@ -621,6 +759,8 @@ func fetchDeviceStatus(cfg *models.ServerConfig) *DeviceStatus {
 			return fetchIDRAC8Status(cfg, creds)
 		case "apc_ups":
 			return fetchAPCStatus(cfg.BMCIP, cfg.BMCPort, creds)
+		case "nanokvm":
+			return fetchNanoKVMStatus(cfg.BMCIP, cfg.BMCPort, creds)
 		default:
 			// AMI MegaRAC
 			return fetchMegaRACStatus(cfg.BMCIP, cfg.BMCPort, creds)
