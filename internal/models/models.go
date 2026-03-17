@@ -160,13 +160,26 @@ type JViewerArgs struct {
 	OEMFeatures       string
 }
 
-// SessionStore provides thread-safe access to active sessions.
+// SessionStoreInterface defines the contract for session storage backends.
+type SessionStoreInterface interface {
+	Get(id string) (*KVMSession, bool)
+	Set(session *KVMSession)
+	Delete(id string)
+	List() []*KVMSession
+	FindByServer(serverName string) (*KVMSession, bool)
+}
+
+// SessionStore provides in-memory thread-safe access to active sessions.
+// Implements SessionStoreInterface.
 type SessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*KVMSession
 }
 
-// NewSessionStore creates a new SessionStore.
+// Verify interface compliance at compile time.
+var _ SessionStoreInterface = (*SessionStore)(nil)
+
+// NewSessionStore creates a new in-memory SessionStore.
 func NewSessionStore() *SessionStore {
 	return &SessionStore{
 		sessions: make(map[string]*KVMSession),
@@ -216,6 +229,33 @@ func (s *SessionStore) FindByServer(serverName string) (*KVMSession, bool) {
 		}
 	}
 	return nil, false
+}
+
+// AuditEntry represents a single audit log event.
+type AuditEntry struct {
+	ID         int64     `json:"id"`
+	Timestamp  time.Time `json:"timestamp"`
+	EventType  string    `json:"event_type"`
+	UserEmail  string    `json:"user_email,omitempty"`
+	ServerName string    `json:"server_name,omitempty"`
+	SessionID  string    `json:"session_id,omitempty"`
+	RemoteAddr string    `json:"remote_addr,omitempty"`
+	Details    any       `json:"details,omitempty"`
+}
+
+// AuditFilter specifies query parameters for retrieving audit entries.
+type AuditFilter struct {
+	EventType  string
+	ServerName string
+	UserEmail  string
+	Limit      int
+	Offset     int
+}
+
+// AuditLogger is the interface for audit logging backends.
+type AuditLogger interface {
+	LogAudit(entry AuditEntry) error
+	QueryAudit(filter AuditFilter) ([]AuditEntry, error)
 }
 
 // DeviceStatus holds polled status information for a single device.

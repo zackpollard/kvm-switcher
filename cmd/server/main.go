@@ -20,6 +20,7 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
+	"github.com/zackpollard/kvm-switcher/internal/store"
 )
 
 func main() {
@@ -59,8 +60,28 @@ func main() {
 		log.Printf("Warning: failed to cleanup orphans: %v", err)
 	}
 
-	// Create API server
-	srv := api.NewServer(cfg, cm)
+	// Open SQLite database for audit logging and persistent sessions
+	db, err := store.Open(cfg.Settings.DBPath)
+	if err != nil {
+		log.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+	log.Printf("Database opened at %s", cfg.Settings.DBPath)
+
+	// Create API server with SQLite-backed session store
+	sessionStore, err := store.NewSQLiteSessionStore(db)
+	if err != nil {
+		log.Fatalf("Failed to initialize session store: %v", err)
+	}
+
+	// Use DB as audit logger if audit logging is enabled
+	var auditLogger models.AuditLogger
+	if cfg.Settings.AuditLog != nil && *cfg.Settings.AuditLog {
+		auditLogger = db
+		log.Println("Audit logging enabled")
+	}
+
+	srv := api.NewServerWithStore(cfg, cm, sessionStore, auditLogger)
 
 	// Set up OIDC provider if enabled
 	var oidcProvider *kvmoidc.Provider
@@ -82,11 +103,11 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		// Check container runtime is reachable
-		if err := cm.CleanupOrphans(r.Context()); err != nil {
+		// Check DB is reachable
+		if err := db.Ping(); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"status":"unavailable","reason":"container runtime unreachable"}`))
+			w.Write([]byte(`{"status":"unavailable","reason":"database unreachable"}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -121,6 +142,7 @@ func main() {
 		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
 		mux.Handle("POST /api/ipmi-session/{name}", rateLimited(http.HandlerFunc(srv.CreateIPMISession)))
 		mux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
+		mux.HandleFunc("GET /api/audit-log", srv.GetAuditLog)
 		mux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
 		mux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)

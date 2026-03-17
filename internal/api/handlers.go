@@ -25,16 +25,33 @@ import (
 // Server holds the API dependencies.
 type Server struct {
 	Config      *models.AppConfig
-	Sessions    *models.SessionStore
+	Sessions    models.SessionStoreInterface
 	Container   containermgr.Manager
 	BMCCreds    map[string]*models.BMCCredEntry // session ID -> BMC creds for logout
 	bmcCredsMu  sync.Mutex
 	StatusCache *StatusCache
+	AuditDB     models.AuditLogger // optional audit logging backend
 }
 
-// NewServer creates a new API server and starts background pollers.
+// NewServer creates a new API server with an in-memory session store and starts background pollers.
 func NewServer(cfg *models.AppConfig, cm containermgr.Manager) *Server {
 	srv := newServerCore(cfg, cm)
+	StartSessionManager(cfg.Servers, srv.StatusCache)
+	StartStatusPoller(cfg.Servers, srv.StatusCache)
+	return srv
+}
+
+// NewServerWithStore creates a new API server with a custom session store and starts background pollers.
+func NewServerWithStore(cfg *models.AppConfig, cm containermgr.Manager, sessions models.SessionStoreInterface, auditDB models.AuditLogger) *Server {
+	sc := NewStatusCache()
+	srv := &Server{
+		Config:      cfg,
+		Sessions:    sessions,
+		Container:   cm,
+		BMCCreds:    make(map[string]*models.BMCCredEntry),
+		StatusCache: sc,
+		AuditDB:     auditDB,
+	}
 	StartSessionManager(cfg.Servers, srv.StatusCache)
 	StartStatusPoller(cfg.Servers, srv.StatusCache)
 	return srv
@@ -157,6 +174,14 @@ func (s *Server) CreateSession(w http.ResponseWriter, r *http.Request) {
 
 	// Start the session asynchronously
 	go s.startSession(session, serverCfg)
+
+	// Audit log
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("session_create", userEmail, req.ServerName, session.ID, ip, nil)
 
 	writeJSON(w, http.StatusAccepted, &snapshot)
 }
@@ -352,6 +377,15 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	s.Sessions.Set(session)
 
 	log.Printf("Session %s: terminated", id)
+
+	// Audit log
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	delIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("session_delete", userEmail, session.ServerName, id, delIP, nil)
+
 	writeJSON(w, http.StatusOK, session)
 }
 
@@ -394,6 +428,14 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("IPMI session for %s: authenticated, credentials injected into proxy", name)
+
+	// Audit log
+	ipmiUserEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		ipmiUserEmail = user.Email
+	}
+	ipmiIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("ipmi_session", ipmiUserEmail, name, "", ipmiIP, nil)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"board_type":     serverCfg.BoardType,
@@ -593,6 +635,51 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+// GetAuditLog handles GET /api/audit-log.
+func (s *Server) GetAuditLog(w http.ResponseWriter, r *http.Request) {
+	if s.AuditDB == nil {
+		writeError(w, http.StatusNotFound, "audit log not enabled")
+		return
+	}
+
+	filter := models.AuditFilter{
+		EventType:  r.URL.Query().Get("event_type"),
+		ServerName: r.URL.Query().Get("server_name"),
+		UserEmail:  r.URL.Query().Get("user_email"),
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		fmt.Sscanf(v, "%d", &filter.Limit)
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		fmt.Sscanf(v, "%d", &filter.Offset)
+	}
+
+	entries, err := s.AuditDB.QueryAudit(filter)
+	if err != nil {
+		log.Printf("GetAuditLog: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to query audit log")
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// logAudit is a helper to write audit entries when the audit backend is configured.
+func (s *Server) logAudit(eventType, userEmail, serverName, sessionID, remoteAddr string, details any) {
+	if s.AuditDB == nil {
+		return
+	}
+	if err := s.AuditDB.LogAudit(models.AuditEntry{
+		EventType:  eventType,
+		UserEmail:  userEmail,
+		ServerName: serverName,
+		SessionID:  sessionID,
+		RemoteAddr: remoteAddr,
+		Details:    details,
+	}); err != nil {
+		log.Printf("audit: failed to log %s: %v", eventType, err)
+	}
 }
 
 // CleanupStaleBMCCreds removes BMC credentials older than the configured TTL
