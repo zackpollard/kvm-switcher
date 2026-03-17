@@ -31,19 +31,25 @@ type Server struct {
 	StatusCache *StatusCache
 }
 
-// NewServer creates a new API server.
+// NewServer creates a new API server and starts background pollers.
 func NewServer(cfg *models.AppConfig, cm containermgr.Manager) *Server {
+	srv := newServerCore(cfg, cm)
+	StartSessionManager(cfg.Servers, srv.StatusCache)
+	StartStatusPoller(cfg.Servers, srv.StatusCache)
+	return srv
+}
+
+// newServerCore creates a Server without starting background goroutines.
+// Used by tests to avoid background pollers racing with test assertions.
+func newServerCore(cfg *models.AppConfig, cm containermgr.Manager) *Server {
 	sc := NewStatusCache()
-	srv := &Server{
+	return &Server{
 		Config:      cfg,
 		Sessions:    models.NewSessionStore(),
 		Container:   cm,
 		BMCCreds:    make(map[string]*models.BMCCredentials),
 		StatusCache: sc,
 	}
-	StartSessionManager(cfg.Servers, sc)
-	StartStatusPoller(cfg.Servers, sc)
-	return srv
 }
 
 // ServerInfo is the JSON response for a server listing.

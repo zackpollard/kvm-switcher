@@ -55,7 +55,7 @@ func newTestConfig(oidcEnabled bool) *models.AppConfig {
 }
 
 func TestListServers_NoOIDC(t *testing.T) {
-	srv := NewServer(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
 
 	req := httptest.NewRequest("GET", "/api/servers", nil)
 	w := httptest.NewRecorder()
@@ -66,14 +66,16 @@ func TestListServers_NoOIDC(t *testing.T) {
 	}
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(servers) != 3 {
 		t.Errorf("servers = %d, want 3", len(servers))
 	}
 }
 
 func TestListServers_OIDCAdmin(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	user := &models.UserInfo{Email: "admin@test.com", Roles: []string{"admin"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -82,14 +84,16 @@ func TestListServers_OIDCAdmin(t *testing.T) {
 	srv.ListServers(w, req)
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(servers) != 3 {
 		t.Errorf("admin should see all 3 servers, got %d", len(servers))
 	}
 }
 
 func TestListServers_OIDCOps(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -98,7 +102,9 @@ func TestListServers_OIDCOps(t *testing.T) {
 	srv.ListServers(w, req)
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(servers) != 2 {
 		t.Errorf("ops should see 2 servers, got %d", len(servers))
 	}
@@ -110,7 +116,7 @@ func TestListServers_OIDCOps(t *testing.T) {
 }
 
 func TestListServers_OIDCDev(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	user := &models.UserInfo{Email: "dev@test.com", Roles: []string{"dev"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -119,7 +125,9 @@ func TestListServers_OIDCDev(t *testing.T) {
 	srv.ListServers(w, req)
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(servers) != 1 {
 		t.Errorf("dev should see 1 server, got %d", len(servers))
 	}
@@ -129,7 +137,7 @@ func TestListServers_OIDCDev(t *testing.T) {
 }
 
 func TestListServers_OIDCNoMatchingRole(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	user := &models.UserInfo{Email: "nobody@test.com", Roles: []string{"viewer"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -138,14 +146,16 @@ func TestListServers_OIDCNoMatchingRole(t *testing.T) {
 	srv.ListServers(w, req)
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(servers) != 0 {
 		t.Errorf("viewer should see 0 servers, got %d", len(servers))
 	}
 }
 
 func TestListServers_OIDCMultiRole(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	user := &models.UserInfo{Email: "multi@test.com", Roles: []string{"ops", "dev"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -154,14 +164,16 @@ func TestListServers_OIDCMultiRole(t *testing.T) {
 	srv.ListServers(w, req)
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if len(servers) != 3 {
 		t.Errorf("ops+dev should see all 3 servers, got %d", len(servers))
 	}
 }
 
 func TestCreateSession_OIDCForbidden(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	body := `{"server_name":"server-3"}`
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
@@ -176,14 +188,16 @@ func TestCreateSession_OIDCForbidden(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 	if resp["error"] != "access denied to this server" {
 		t.Errorf("error = %q, want 'access denied to this server'", resp["error"])
 	}
 }
 
 func TestCreateSession_OIDCAllowed(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	body := `{"server_name":"server-1"}`
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
@@ -200,7 +214,7 @@ func TestCreateSession_OIDCAllowed(t *testing.T) {
 }
 
 func TestCreateSession_NoOIDC(t *testing.T) {
-	srv := NewServer(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
 
 	body := `{"server_name":"server-1"}`
 	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body))
@@ -214,7 +228,7 @@ func TestCreateSession_NoOIDC(t *testing.T) {
 }
 
 func TestCreateSession_ServerNotFound(t *testing.T) {
-	srv := NewServer(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
 
 	body := `{"server_name":"nonexistent"}`
 	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body))
@@ -228,7 +242,7 @@ func TestCreateSession_ServerNotFound(t *testing.T) {
 }
 
 func TestCreateSession_InvalidBody(t *testing.T) {
-	srv := NewServer(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
 
 	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -241,7 +255,7 @@ func TestCreateSession_InvalidBody(t *testing.T) {
 }
 
 func TestListServers_ActiveSessionFlag(t *testing.T) {
-	srv := NewServer(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
 
 	// Add an active session for server-1
 	srv.Sessions.Set(&models.KVMSession{
@@ -255,7 +269,9 @@ func TestListServers_ActiveSessionFlag(t *testing.T) {
 	srv.ListServers(w, req)
 
 	var servers []ServerInfo
-	json.NewDecoder(w.Body).Decode(&servers)
+	if err := json.NewDecoder(w.Body).Decode(&servers); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
 
 	for _, s := range servers {
 		if s.Name == "server-1" && !s.HasActive {
@@ -268,7 +284,7 @@ func TestListServers_ActiveSessionFlag(t *testing.T) {
 }
 
 func TestListServers_EmptyArrayNotNull(t *testing.T) {
-	srv := NewServer(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
 
 	// User with no matching roles
 	user := &models.UserInfo{Email: "nobody@test.com", Roles: []string{"viewer"}}
