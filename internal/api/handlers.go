@@ -151,10 +151,13 @@ func (s *Server) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Sessions.Set(session)
 
+	// Snapshot for the HTTP response before the goroutine mutates the session.
+	snapshot := *session
+
 	// Start the session asynchronously
 	go s.startSession(session, serverCfg)
 
-	writeJSON(w, http.StatusAccepted, session)
+	writeJSON(w, http.StatusAccepted, &snapshot)
 }
 
 func (s *Server) startSession(session *models.KVMSession, serverCfg *models.ServerConfig) {
