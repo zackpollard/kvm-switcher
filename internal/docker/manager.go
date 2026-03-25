@@ -13,7 +13,7 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
@@ -137,16 +137,9 @@ func (m *Manager) StartContainer(ctx context.Context, session *models.KVMSession
 
 	networkConfig := &network.NetworkingConfig{}
 
-	// Force linux/amd64 platform -- JViewer's native JNI libraries (.so files)
-	// from the BMC are compiled for x86_64 only
-	platform := &ocispec.Platform{
-		OS:           "linux",
-		Architecture: "amd64",
-	}
-
 	containerName := fmt.Sprintf("kvm-switcher-%s", session.ID)
 
-	resp, err := m.client.ContainerCreate(ctx, containerConfig, hostConfig, networkConfig, platform, containerName)
+	resp, err := m.client.ContainerCreate(ctx, containerConfig, hostConfig, networkConfig, nil, containerName)
 	if err != nil {
 		return 0, fmt.Errorf("creating container: %w", err)
 	}
