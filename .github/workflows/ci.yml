@@ -74,7 +74,7 @@ jobs:
           - image: jviewer
             context: docker/jviewer
             file: docker/jviewer/Dockerfile
-            platforms: linux/amd64
+            platforms: linux/amd64,linux/arm64
     steps:
       - uses: actions/checkout@v4
 
