@@ -59,7 +59,9 @@ settings:
   runtime: "docker"
 
   # Container image for KVM sessions (AMI MegaRAC only)
-  container_image: "kvm-switcher/jviewer:latest"
+  container_image: "ghcr.io/zackpollard/jviewer:latest"
+  # For local development builds:
+  # container_image: "kvm-switcher/jviewer:latest"
 
   # Kubernetes settings (only used when runtime is "kubernetes")
   # kube_namespace: "kvm-switcher"    # namespace for KVM pods (must exist)
