@@ -28,13 +28,26 @@ jobs:
       - name: Calculate next version from conventional commits
         id: version
         run: |
-          # Get the latest tag, default to v0.0.0 if none exists
-          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # Find the highest semver tag (regardless of ancestry — survives force-pushes)
+          latest_tag=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$latest_tag" ]; then
+            latest_tag="v0.0.0"
+          fi
           echo "Latest tag: $latest_tag"
 
           # Parse current version
           version="${latest_tag#v}"
           IFS='.' read -r major minor patch <<< "$version"
+
+          # Find the merge-base between the tag and HEAD for commit analysis.
+          # If the tag is an ancestor of HEAD, use it directly.
+          # If not (e.g., after force-push), analyze all commits on HEAD.
+          if git merge-base --is-ancestor "$latest_tag" HEAD 2>/dev/null; then
+            commit_range="${latest_tag}..HEAD"
+          else
+            echo "Tag $latest_tag is not an ancestor of HEAD (force-push?), analyzing all commits"
+            commit_range="HEAD"
+          fi
 
           # Analyze commits since last tag
           bump="none"
@@ -58,7 +71,7 @@ jobs:
               if [ "$bump" = "none" ]; then bump="patch"; fi
               changelog="${changelog}\n- ${subject}"
             fi
-          done <<< "$(git log "${latest_tag}..HEAD" --oneline 2>/dev/null || git log --oneline)"
+          done <<< "$(git log "$commit_range" --oneline 2>/dev/null)"
 
           if [ "$bump" = "none" ]; then
             echo "No version bump needed"
@@ -77,6 +90,16 @@ jobs:
 
           new_version="${major}.${minor}.${patch}"
           new_tag="v${new_version}"
+
+          # Check if the computed tag already exists (prevents collisions)
+          if git rev-parse "$new_tag" >/dev/null 2>&1; then
+            echo "Tag $new_tag already exists, skipping"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+            echo "new_tag=${new_tag}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "Bump: $bump -> $new_tag"
 
           echo "bumped=true" >> "$GITHUB_OUTPUT"
@@ -110,12 +133,15 @@ jobs:
           - image: kvm-switcher
             context: .
             file: Dockerfile
+            platforms: linux/amd64,linux/arm64
           - image: jviewer
             context: docker/jviewer
             file: docker/jviewer/Dockerfile
-            platform: linux/amd64
+            platforms: linux/amd64
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -131,7 +157,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          platforms: ${{ matrix.platform || 'linux/amd64' }}
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}:latest
@@ -146,6 +172,8 @@ jobs:
     if: needs.version.outputs.bumped == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Create and push tag
         run: |
