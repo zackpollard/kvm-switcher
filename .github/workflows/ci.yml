@@ -62,23 +62,34 @@ jobs:
         working-directory: web
 
   docker-build:
-    name: Docker Build
-    runs-on: ubuntu-latest
+    name: "Build ${{ matrix.image }} (${{ matrix.platform }})"
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - image: kvm-switcher
             context: .
             file: Dockerfile
-            platforms: linux/amd64,linux/arm64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - image: kvm-switcher
+            context: .
+            file: Dockerfile
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
           - image: jviewer
             context: docker/jviewer
             file: docker/jviewer/Dockerfile
-            platforms: linux/amd64,linux/arm64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - image: jviewer
+            context: docker/jviewer
+            file: docker/jviewer/Dockerfile
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -87,7 +98,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          platforms: ${{ matrix.platforms }}
+          platforms: ${{ matrix.platform }}
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }},mode=max
