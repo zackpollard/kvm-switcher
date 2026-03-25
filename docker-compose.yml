@@ -1,0 +1,15 @@
+services:
+  kvm-switcher:
+    image: ghcr.io/zackpollard/kvm-switcher:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./configs/servers.yaml:/app/configs/servers.yaml:ro
+    env_file:
+      - .env
+    # The app manages JViewer containers via the Docker socket.
+    # Set container_image in servers.yaml to match your jviewer image:
+    #   container_image: "ghcr.io/zackpollard/jviewer:latest"
+    # Pull it before starting: docker pull ghcr.io/zackpollard/jviewer:latest
