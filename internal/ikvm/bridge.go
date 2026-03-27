@@ -24,9 +24,10 @@ type Bridge struct {
 	// VNC state
 	width       uint16
 	height      uint16
-	fbMu        sync.Mutex
-	fbDirty     bool
-	frameReady  chan struct{} // signals from video frame callback
+	fbMu           sync.Mutex
+	fbDirty        bool
+	frameReady     chan struct{} // signals from video frame callback
+	resChangeCount int          // frames since last resolution change
 
 	// Keyboard state — USB HID uses cumulative modifier tracking
 	kbdModifiers byte
@@ -168,9 +169,10 @@ func (b *Bridge) Serve(ws *websocket.Conn) error {
 
 // onVideoFrame is called by the IVTP client when a complete video frame arrives.
 func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
-	// Decode with a FRESH decoder to compare with the accumulated one
 	b.fbMu.Lock()
 	defer b.fbMu.Unlock()
+
+	prevW, prevH := b.width, b.height
 
 	if err := b.decoder.Decode(header, data); err != nil {
 		log.Printf("iKVM bridge: decode error: %v", err)
@@ -179,6 +181,24 @@ func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 
 	b.width = b.decoder.Width
 	b.height = b.decoder.Height
+
+	// After a resolution change, the JPEG decoder produces neutral grey (Y=128)
+	// for the first few frames because the BMC encodes against a neutral reference.
+	// JViewer avoids this by creating a fresh black BufferedImage on each resolution
+	// change — the Swing paint system doesn't display partial frames.
+	// We suppress frames after resolution change until we get one with enough
+	// real content (>5KB), then request a refresh to ensure full screen coverage.
+	if b.width != prevW || b.height != prevH {
+		b.resChangeCount = 0
+		if b.client != nil {
+			go b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
+		}
+	}
+	if b.resChangeCount < 10 {
+		b.resChangeCount++
+		// Don't send transitional frames — they contain grey artifacts
+		return
+	}
 
 	b.fbDirty = true
 	select {
