@@ -115,18 +115,24 @@ Verified by extracting actual values from JViewer via Java reflection in Docker 
 - **Needs**: Investigation after QT table fix
 
 ## Fixes Applied (Committed)
-1. ✅ Color conversion tables restored to BT.601 coefficients (commit ec9c3cf → reverted by c8f6dc5)
-2. ✅ Color conversion tables set to JViewer's exact `calculatedRGBof*` values (commit c8f6dc5)
-3. ✅ Huffman byte truncation: `int(byte(code - minorCode))` matching Java `(byte)` cast
-4. ✅ `skipKbits` uses uint64 arithmetic (matching `updateReadBuf`)
+1. ✅ Color conversion tables set to JViewer's exact `calculatedRGBof*` values (commit c8f6dc5)
+2. ✅ Huffman byte truncation: `int(byte(code - minorCode))` matching Java `(byte)` cast
+3. ✅ `skipKbits` uses uint64 arithmetic (matching `updateReadBuf`)
+4. ✅ Correct ASPEED quantization tables — 16 tables from JTables.java (commit 288f000)
+5. ✅ `int8` signed byte handling in `setQuantizationTable` for values > 127 (commit 288f000)
+6. ✅ Range limit table off-by-one at index 895 (was already applied)
 
-## Fixes Identified But NOT Yet Applied
-1. 🔲 Correct ASPEED quantization tables (16 tables from JTables.java)
-2. 🔲 `int8` signed byte handling in `setQuantizationTable` for tables with values > 127
-3. 🔲 Range limit table off-by-one at index 895
+## Test Results After All Fixes
+- **Talos console (800x600)**: Clean output, no random colored pixels ✅
+- **BIOS POST (720x400)**: Grey bars persist (DC=0 → Y=128 issue, documented as correct JPEG behavior)
+- **Random colored pixels**: Eliminated by QT table fix ✅
+- **Stale characters**: Needs retesting with live BMC
 
-## Current Approach for Grey Bars
-Sending `REFRESH_VIDEO_SCREEN` requests after resolution changes to force the BMC to re-encode against the actual screen content. This is a mitigation, not a fix — the decoder correctly produces Y=128 for DC=0 blocks, which is what the BMC sends.
+## Remaining Issue: Grey Bars During BIOS POST
+The grey bars are correct JPEG decoder output (DC=0 → Y=128 → grey). JViewer produces the same output but hides it through its Docker container buffering pipeline. Options:
+1. Send `REFRESH_VIDEO_SCREEN` after resolution changes (current approach, 30s periodic)
+2. Skip frames after resolution change until a clean full frame arrives
+3. Accept as a cosmetic issue that self-corrects when the BMC sends proper content
 
 ## Files
 - Decoder: `internal/ikvm/decoder.go`
