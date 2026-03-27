@@ -425,23 +425,20 @@ func (d *Decoder) initRangeLimitTable() {
 }
 
 // initColorTable builds the YUV-to-RGB conversion lookup tables.
+// Uses the exact same coefficients as JViewer's precalculateCrCbTables:
+//   R = Y + 1.402*(Cr-128)
+//   G = Y - 0.34414*(Cb-128) - 0.71414*(Cr-128)
+//   B = Y + 1.772*(Cb-128)
 func (d *Decoder) initColorTable() {
-	fixG := func(v float64) int {
-		return int(v*65536.0 + 0.5)
-	}
-	half := 65536 >> 1
-	x := -128
 	for i := 0; i < 256; i++ {
-		d.crToR[i] = (fixG(1.597656)*x + half) >> 16
-		d.cbToB[i] = (fixG(2.015625)*x + half) >> 16
-		d.crToG[i] = (-fixG(0.8125)*x + half) >> 16
-		d.cbToG[i] = (-fixG(0.390625)*x + half) >> 16
-		x++
+		d.crToR[i] = int(float64(i-128) * 1.402)
+		d.cbToB[i] = int(float64(i-128) * 1.772)
+		d.crToG[i] = int(-0.71414 * float64(i-128))
+		d.cbToG[i] = int(-0.34414 * float64(i-128))
 	}
-	x = -16
+	// yTable: identity (Y value passed through directly)
 	for i := 0; i < 256; i++ {
-		d.yTable[i] = (fixG(1.164)*x + half) >> 16
-		x++
+		d.yTable[i] = i
 	}
 }
 
@@ -899,25 +896,27 @@ func (d *Decoder) convertYUVtoRGB(tileX, tileY int) {
 					d.previousYUV[yuvIdx+2] = crVal
 				}
 
-				// Clamp indices.
+				// Clamp YUV indices for table lookup.
 				if yVal < 0 { yVal = 0 } else if yVal > 255 { yVal = 255 }
 				if cbVal < 0 { cbVal = 0 } else if cbVal > 255 { cbVal = 255 }
 				if crVal < 0 { crVal = 0 } else if crVal > 255 { crVal = 255 }
 
-				b := d.yTable[yVal] + d.cbToB[cbVal]
-				g := d.yTable[yVal] + d.cbToG[cbVal] + d.crToG[crVal]
+				// Java: R = Y + cr_tab[Cr], G = Y + green_tab, B = Y + cb_tab[Cb]
 				r := d.yTable[yVal] + d.crToR[crVal]
+				g := d.yTable[yVal] + d.crToG[crVal] + d.cbToG[cbVal]
+				b := d.yTable[yVal] + d.cbToB[cbVal]
 
-				if b >= 0 { b += 256 } else { b = 0 }
-				if g >= 0 { g += 256 } else { g = 0 }
-				if r >= 0 { r += 256 } else { r = 0 }
+				// Clamp to 0-255
+				if r < 0 { r = 0 } else if r > 255 { r = 255 }
+				if g < 0 { g = 0 } else if g > 255 { g = 255 }
+				if b < 0 { b = 0 } else if b > 255 { b = 255 }
 
 				fbIdx := (py*fbW + px) * 4
 				if fbIdx+3 < len(d.Framebuffer) {
-					d.Framebuffer[fbIdx] = byte(d.rangeLimit[b])   // B
-					d.Framebuffer[fbIdx+1] = byte(d.rangeLimit[g]) // G
-					d.Framebuffer[fbIdx+2] = byte(d.rangeLimit[r]) // R
-					d.Framebuffer[fbIdx+3] = 255                   // A
+					d.Framebuffer[fbIdx] = byte(b)     // B
+					d.Framebuffer[fbIdx+1] = byte(g)   // G
+					d.Framebuffer[fbIdx+2] = byte(r)   // R
+					d.Framebuffer[fbIdx+3] = 255       // A
 				}
 			}
 		}
@@ -974,27 +973,19 @@ func (d *Decoder) convertYUVtoRGB(tileX, tileY int) {
 				if cbVal < 0 { cbVal = 0 } else if cbVal > 255 { cbVal = 255 }
 				if crVal < 0 { crVal = 0 } else if crVal > 255 { crVal = 255 }
 
-				b := d.yTable[yVal] + d.cbToB[cbVal]
-				g := d.yTable[yVal] + d.cbToG[cbVal] + d.crToG[crVal]
 				r := d.yTable[yVal] + d.crToR[crVal]
+				g := d.yTable[yVal] + d.crToG[crVal] + d.cbToG[cbVal]
+				b := d.yTable[yVal] + d.cbToB[cbVal]
+
+				if r < 0 { r = 0 } else if r > 255 { r = 255 }
+				if g < 0 { g = 0 } else if g > 255 { g = 255 }
+				if b < 0 { b = 0 } else if b > 255 { b = 255 }
 
 				fbIdx := (py*fbW + px) * 4
 				if fbIdx+3 < len(d.Framebuffer) {
-					if b >= 0 {
-						d.Framebuffer[fbIdx] = byte(d.rangeLimit[b+256])
-					} else {
-						d.Framebuffer[fbIdx] = 0
-					}
-					if g >= 0 {
-						d.Framebuffer[fbIdx+1] = byte(d.rangeLimit[g+256])
-					} else {
-						d.Framebuffer[fbIdx+1] = 0
-					}
-					if r >= 0 {
-						d.Framebuffer[fbIdx+2] = byte(d.rangeLimit[r+256])
-					} else {
-						d.Framebuffer[fbIdx+2] = 0
-					}
+					d.Framebuffer[fbIdx] = byte(b)
+					d.Framebuffer[fbIdx+1] = byte(g)
+					d.Framebuffer[fbIdx+2] = byte(r)
 					d.Framebuffer[fbIdx+3] = 255
 				}
 			}
@@ -1050,20 +1041,20 @@ func (d *Decoder) convertYUVtoRGBPass2(tileX, tileY int) {
 			if cbVal < 0 { cbVal = 0 } else if cbVal > 255 { cbVal = 255 }
 			if crVal < 0 { crVal = 0 } else if crVal > 255 { crVal = 255 }
 
-			b := d.yTable[yVal] + d.cbToB[cbVal]
-			g := d.yTable[yVal] + d.cbToG[cbVal] + d.crToG[crVal]
 			r := d.yTable[yVal] + d.crToR[crVal]
+			g := d.yTable[yVal] + d.crToG[crVal] + d.cbToG[cbVal]
+			b := d.yTable[yVal] + d.cbToB[cbVal]
 
-			if b >= 0 { b += 256 } else { b = 0 }
-			if g >= 0 { g += 256 } else { g = 0 }
-			if r >= 0 { r += 256 } else { r = 0 }
+			if r < 0 { r = 0 } else if r > 255 { r = 255 }
+			if g < 0 { g = 0 } else if g > 255 { g = 255 }
+			if b < 0 { b = 0 } else if b > 255 { b = 255 }
 
 			fbIdx := (py*fbW + px) * 4
 			if fbIdx+3 < len(d.Framebuffer) {
-				d.Framebuffer[fbIdx] = byte(d.rangeLimit[b])   // B
-				d.Framebuffer[fbIdx+1] = byte(d.rangeLimit[g]) // G
-				d.Framebuffer[fbIdx+2] = byte(d.rangeLimit[r]) // R
-				d.Framebuffer[fbIdx+3] = 255                   // A
+				d.Framebuffer[fbIdx] = byte(b)
+				d.Framebuffer[fbIdx+1] = byte(g)
+				d.Framebuffer[fbIdx+2] = byte(r)
+				d.Framebuffer[fbIdx+3] = 255
 			}
 		}
 	}
