@@ -24,9 +24,10 @@ type Bridge struct {
 	// VNC state
 	width       uint16
 	height      uint16
-	fbMu        sync.Mutex
-	fbDirty     bool
-	frameReady  chan struct{} // signals from video frame callback
+	fbMu           sync.Mutex
+	fbDirty        bool
+	frameReady     chan struct{} // signals from video frame callback
+	
 
 	// Keyboard state — USB HID uses cumulative modifier tracking
 	kbdModifiers byte
@@ -168,9 +169,10 @@ func (b *Bridge) Serve(ws *websocket.Conn) error {
 
 // onVideoFrame is called by the IVTP client when a complete video frame arrives.
 func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
-	// Decode with a FRESH decoder to compare with the accumulated one
 	b.fbMu.Lock()
 	defer b.fbMu.Unlock()
+
+	prevW, prevH := b.width, b.height
 
 	if err := b.decoder.Decode(header, data); err != nil {
 		log.Printf("iKVM bridge: decode error: %v", err)
@@ -179,6 +181,29 @@ func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 
 	b.width = b.decoder.Width
 	b.height = b.decoder.Height
+
+	// After a resolution change, JPEG blocks decode to neutral grey (Y=128)
+	// because the BMC encodes against a neutral reference. JViewer handles this
+	// by creating a fresh black BufferedImage via prepareBufImage() — the grey
+	// pixels from the decoder are overwritten when a new image is allocated.
+	// We match this by zeroing any grey (Y≈128) pixels in the framebuffer after
+	// each decode, converting them to black. This only affects the exact neutral
+	// grey value (RGB 130,130,130) that comes from JPEG DC=0 blocks.
+	if b.width != prevW || b.height != prevH {
+		if b.client != nil {
+			go b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
+		}
+	}
+	// Scrub neutral grey pixels (130,130,130) to black.
+	// These come from JPEG DC=0 blocks and are not real screen content.
+	fb := b.decoder.Framebuffer
+	for i := 0; i+3 < len(fb); i += 4 {
+		if fb[i] == 130 && fb[i+1] == 130 && fb[i+2] == 130 {
+			fb[i] = 0
+			fb[i+1] = 0
+			fb[i+2] = 0
+		}
+	}
 
 	b.fbDirty = true
 	select {
