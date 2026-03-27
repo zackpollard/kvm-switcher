@@ -16,6 +16,7 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/auth"
 	"github.com/zackpollard/kvm-switcher/internal/config"
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
+	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 
@@ -31,6 +32,8 @@ type Server struct {
 	bmcCredsMu  sync.Mutex
 	StatusCache *StatusCache
 	AuditDB     models.AuditLogger // optional audit logging backend
+	Bridges     map[string]*ikvm.Bridge // active iKVM bridges by session ID
+	bridgesMu   sync.Mutex
 }
 
 // NewServer creates a new API server with an in-memory session store and starts background pollers.
@@ -49,6 +52,7 @@ func NewServerWithStore(cfg *models.AppConfig, cm containermgr.Manager, sessions
 		Sessions:    sessions,
 		Container:   cm,
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
+		Bridges:     make(map[string]*ikvm.Bridge),
 		StatusCache: sc,
 		AuditDB:     auditDB,
 	}
@@ -66,6 +70,7 @@ func newServerCore(cfg *models.AppConfig, cm containermgr.Manager) *Server {
 		Sessions:    models.NewSessionStore(),
 		Container:   cm,
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
+		Bridges:     make(map[string]*ikvm.Bridge),
 		StatusCache: sc,
 	}
 }
@@ -769,6 +774,199 @@ func (s *Server) GetAuditLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, entries)
 }
 
+// --- iKVM control endpoints ---
+// These send commands through the active IVTP tunnel to the BMC.
+
+// getBridge returns the active iKVM bridge for a session, or nil.
+func (s *Server) getBridge(sessionID string) *ikvm.Bridge {
+	s.bridgesMu.Lock()
+	defer s.bridgesMu.Unlock()
+	return s.Bridges[sessionID]
+}
+
+// KVMPowerControl sends a power command to the BMC through the KVM tunnel.
+// POST /api/sessions/{id}/power  body: {"action": "on"|"off"|"cycle"|"reset"|"soft_reset"}
+func (s *Server) KVMPowerControl(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var code byte
+	switch req.Action {
+	case "off":
+		code = 0
+	case "on":
+		code = 1
+	case "cycle":
+		code = 2
+	case "reset":
+		code = 3
+	case "soft_reset":
+		code = 5
+	default:
+		writeError(w, http.StatusBadRequest, "invalid action: must be on/off/cycle/reset/soft_reset")
+		return
+	}
+
+	if err := bridge.SendPowerCommand(code); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	log.Printf("KVM power control: %s on %s (session %s)", req.Action, serverName, id)
+	s.logAudit("kvm_power_control", "", serverName, id, r.RemoteAddr, map[string]string{"action": req.Action})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": req.Action})
+}
+
+// KVMDisplayLock locks or unlocks the host display.
+// POST /api/sessions/{id}/display-lock  body: {"lock": true|false}
+func (s *Server) KVMDisplayLock(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+
+	var req struct {
+		Lock bool `json:"lock"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := bridge.SendDisplayLock(req.Lock); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "lock": req.Lock})
+}
+
+// KVMMouseMode sets the mouse input mode.
+// POST /api/sessions/{id}/mouse-mode  body: {"mode": "relative"|"absolute"}
+func (s *Server) KVMMouseMode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+
+	var req struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var code byte
+	switch req.Mode {
+	case "relative":
+		code = 1
+	case "absolute":
+		code = 2
+	default:
+		writeError(w, http.StatusBadRequest, "invalid mode: must be relative or absolute")
+		return
+	}
+
+	if err := bridge.SetMouseMode(code); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": req.Mode})
+}
+
+// KVMKeyboardLayout changes the keyboard layout.
+// POST /api/sessions/{id}/keyboard-layout  body: {"layout": "en"|"fr"|"de"|"es"|"jp"}
+func (s *Server) KVMKeyboardLayout(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+
+	var req struct {
+		Layout string `json:"layout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Keyboard layout strings (from JViewer's -keyboardlayout argument)
+	var layoutCode string
+	switch req.Layout {
+	case "en":
+		layoutCode = "AD"
+	case "fr":
+		layoutCode = "FR"
+	case "de":
+		layoutCode = "DE"
+	case "es":
+		layoutCode = "ES"
+	case "jp":
+		layoutCode = "JP"
+	default:
+		writeError(w, http.StatusBadRequest, "invalid layout: must be en/fr/de/es/jp")
+		return
+	}
+
+	if err := bridge.SetKeyboardLayout(layoutCode); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "layout": req.Layout})
+}
+
+// KVMIPMICommand sends a raw IPMI command through the KVM tunnel.
+// POST /api/sessions/{id}/ipmi  body: {"data": [byte array as hex string]}
+func (s *Server) KVMIPMICommand(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+
+	var req struct {
+		Data []byte `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Data) == 0 {
+		writeError(w, http.StatusBadRequest, "data is required")
+		return
+	}
+
+	if err := bridge.SendIPMICommand(req.Data); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // logAudit is a helper to write audit entries when the audit backend is configured.
 func (s *Server) logAudit(eventType, userEmail, serverName, sessionID, remoteAddr string, details any) {
 	if s.AuditDB == nil {
@@ -837,4 +1035,22 @@ func (s *Server) CleanupStaleBMCCreds(ttlMinutes int) {
 	if len(stale) > 0 {
 		log.Printf("Cleaned up %d stale BMC credential(s)", len(stale))
 	}
+}
+
+// KVMScreenshot returns the current framebuffer as a PNG image.
+// GET /api/sessions/{id}/screenshot
+func (s *Server) KVMScreenshot(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+	pngData := bridge.Screenshot()
+	if pngData == nil {
+		writeError(w, http.StatusServiceUnavailable, "no framebuffer available")
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Write(pngData)
 }

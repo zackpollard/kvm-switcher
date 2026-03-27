@@ -431,7 +431,7 @@ func rewriteVNCServerInit(sessionID string, data []byte) []byte {
 // no Xvfb, no x11vnc. The Go process speaks the BMC's IVTP protocol directly and
 // translates it to VNC/RFB for noVNC.
 func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
-	log.Printf("Session %s: starting native iKVM bridge to %s", session.ID, session.BMCIP)
+	log.Printf("Session %s: starting native iKVM bridge to %s (args=%v)", session.ID, session.BMCIP, session.IKVMArgs != nil)
 
 	// Upgrade to WebSocket FIRST — before any slow BMC auth — so the browser
 	// has an established connection and doesn't time out / trigger reconnect.
@@ -488,11 +488,26 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 		UseSSL:        args.KVMSecure == "1",
 	})
 
+	// Register bridge so API endpoints can send commands through it.
+	s.bridgesMu.Lock()
+	s.Bridges[session.ID] = bridge
+	s.bridgesMu.Unlock()
+
 	log.Printf("Session %s: iKVM bridge started", session.ID)
 	if err := bridge.Serve(clientConn); err != nil {
 		log.Printf("Session %s: iKVM bridge error: %v", session.ID, err)
+		if sess, ok := s.Sessions.Get(session.ID); ok {
+			sess.Status = models.SessionError
+			sess.Error = err.Error()
+			s.Sessions.Set(sess)
+		}
 	}
 	log.Printf("Session %s: iKVM bridge closed", session.ID)
+
+	// Unregister bridge.
+	s.bridgesMu.Lock()
+	delete(s.Bridges, session.ID)
+	s.bridgesMu.Unlock()
 
 	// Clear KVM-active flag so the session manager can resume normal operation.
 	if entry != nil {

@@ -69,6 +69,56 @@ export function getKVMWebSocketURL(sessionId: string): string {
 	return `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
 }
 
+// --- iKVM control commands ---
+
+export async function kvmPowerControl(sessionId: string, action: 'on' | 'off' | 'cycle' | 'reset' | 'soft_reset'): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/power`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ action })
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
+}
+
+export async function kvmDisplayLock(sessionId: string, lock: boolean): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/display-lock`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ lock })
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
+}
+
+export async function kvmMouseMode(sessionId: string, mode: 'relative' | 'absolute'): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/mouse-mode`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ mode })
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
+}
+
+export async function kvmKeyboardLayout(sessionId: string, layout: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/keyboard-layout`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ layout })
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
+}
+
 export interface IPMISession {
 	board_type: string;
 	session_cookie: string;

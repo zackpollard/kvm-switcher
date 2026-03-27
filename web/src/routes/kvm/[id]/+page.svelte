@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { getSession, deleteSession, createSession, getKVMWebSocketURL, type KVMSession } from '$lib/api';
+	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmMouseMode, kvmKeyboardLayout, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 
@@ -12,6 +12,10 @@
 	let viewerContainer = $state<HTMLDivElement>(undefined!);
 	let reconnecting = $state(false);
 	let manualDisconnect = false;
+	let showPowerMenu = $state(false);
+	let showMouseMenu = $state(false);
+	let showKbdMenu = $state(false);
+	let isIKVM = $derived(session?.conn_mode === 'ikvm');
 
 	async function loadSession() {
 		try {
@@ -40,8 +44,11 @@
 
 	async function handleViewerDisconnect() {
 		if (manualDisconnect || reconnecting) return;
-
 		reconnecting = true;
+		error = 'Connection lost. Click to reconnect.';
+	}
+
+	async function reconnect() {
 		error = '';
 		const serverName = session?.server_name;
 		if (!serverName) {
@@ -50,21 +57,17 @@
 			return;
 		}
 
-		// Clean up old session
 		try {
 			await deleteSession(activeSessionId);
 		} catch {
 			// Old session may already be gone
 		}
 
-		// Create a new session for the same server.
-		// Keep reconnecting=true until the new session is connected —
-		// it gets cleared in loadSession when status changes from 'starting'.
 		try {
 			const newSession = await createSession(serverName);
 			session = newSession;
 			activeSessionId = newSession.id;
-			// Update URL without re-triggering effects
+			reconnecting = false;
 			history.replaceState({}, '', `/kvm/${newSession.id}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Reconnection failed';
@@ -74,6 +77,40 @@
 
 	function sendCtrlAltDel() {
 		viewerContainer?.dispatchEvent(new CustomEvent('send-ctrl-alt-del'));
+	}
+
+	async function handlePower(action: 'on' | 'off' | 'cycle' | 'reset' | 'soft_reset') {
+		showPowerMenu = false;
+		if (!confirm(`Are you sure you want to ${action.replace('_', ' ')} this server?`)) return;
+		try {
+			await kvmPowerControl(activeSessionId, action);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Power command failed';
+		}
+	}
+
+	async function toggleDisplayLock() {
+		try {
+			await kvmDisplayLock(activeSessionId, true);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Display lock failed';
+		}
+	}
+
+	async function setMouseMode(mode: 'relative' | 'absolute') {
+		try {
+			await kvmMouseMode(activeSessionId, mode);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Mouse mode change failed';
+		}
+	}
+
+	async function setKeyboard(layout: string) {
+		try {
+			await kvmKeyboardLayout(activeSessionId, layout);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Keyboard layout change failed';
+		}
 	}
 
 	function toggleFullscreen() {
@@ -87,14 +124,10 @@
 	}
 
 	$effect(() => {
-		// Read activeSessionId synchronously so the effect re-runs when it changes
+		// Only depend on activeSessionId, not session state
 		const _id = activeSessionId;
 		loadSession();
-		const interval = setInterval(async () => {
-			if (session?.status === 'starting' || session?.status === 'connected') {
-				await loadSession();
-			}
-		}, session?.status === 'starting' ? 2000 : 30000);
+		const interval = setInterval(loadSession, 1000);
 		return () => clearInterval(interval);
 	});
 
@@ -146,6 +179,63 @@
 			>
 				Ctrl+Alt+Del
 			</button>
+			{#if isIKVM}
+				<div class="relative">
+					<button
+						onclick={() => { showPowerMenu = !showPowerMenu; showMouseMenu = false; showKbdMenu = false; }}
+						class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					>
+						Power
+					</button>
+					{#if showPowerMenu}
+						<div class="absolute right-0 top-full z-50 mt-1 w-40 rounded border border-gray-700 bg-gray-800 py-1 shadow-lg">
+							<button onclick={() => handlePower('on')} class="block w-full px-3 py-1.5 text-left text-xs text-green-400 hover:bg-gray-700">Power On</button>
+							<button onclick={() => handlePower('off')} class="block w-full px-3 py-1.5 text-left text-xs text-red-400 hover:bg-gray-700">Power Off</button>
+							<button onclick={() => handlePower('cycle')} class="block w-full px-3 py-1.5 text-left text-xs text-yellow-400 hover:bg-gray-700">Power Cycle</button>
+							<button onclick={() => handlePower('reset')} class="block w-full px-3 py-1.5 text-left text-xs text-yellow-400 hover:bg-gray-700">Hard Reset</button>
+							<button onclick={() => handlePower('soft_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-orange-400 hover:bg-gray-700">Soft Reset</button>
+						</div>
+					{/if}
+				</div>
+				<button
+					onclick={toggleDisplayLock}
+					class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					title="Lock host display"
+				>
+					Lock Display
+				</button>
+				<div class="relative">
+					<button
+						onclick={() => { showMouseMenu = !showMouseMenu; showKbdMenu = false; showPowerMenu = false; }}
+						class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					>
+						Mouse
+					</button>
+					{#if showMouseMenu}
+						<div class="absolute right-0 top-full z-50 mt-1 w-32 rounded border border-gray-700 bg-gray-800 py-1 shadow-lg">
+							<button onclick={() => { setMouseMode('absolute'); showMouseMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">Absolute</button>
+							<button onclick={() => { setMouseMode('relative'); showMouseMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">Relative</button>
+						</div>
+					{/if}
+				</div>
+				<div class="relative">
+					<button
+						onclick={() => { showKbdMenu = !showKbdMenu; showMouseMenu = false; showPowerMenu = false; }}
+						class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					>
+						Keyboard
+					</button>
+					{#if showKbdMenu}
+						<div class="absolute right-0 top-full z-50 mt-1 w-32 rounded border border-gray-700 bg-gray-800 py-1 shadow-lg">
+							<button onclick={() => { setKeyboard('en'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">English</button>
+							<button onclick={() => { setKeyboard('fr'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">French</button>
+							<button onclick={() => { setKeyboard('de'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">German</button>
+							<button onclick={() => { setKeyboard('es'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">Spanish</button>
+							<button onclick={() => { setKeyboard('jp'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700">Japanese</button>
+						</div>
+					{/if}
+				</div>
+			{/if}
 			<button
 				onclick={toggleFullscreen}
 				class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
@@ -183,17 +273,24 @@
 					</button>
 				</div>
 			</div>
-		{:else if reconnecting || session?.status === 'starting'}
+		{:else if reconnecting}
+			<div class="flex h-full items-center justify-center">
+				<div class="text-center">
+					<p class="text-gray-400">Connection lost</p>
+					<button
+						onclick={reconnect}
+						class="mt-4 rounded bg-blue-700 px-4 py-2 text-sm text-white hover:bg-blue-600"
+					>
+						Reconnect
+					</button>
+				</div>
+			</div>
+		{:else if session?.status === 'starting'}
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
 					<div class="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400"></div>
-					{#if reconnecting}
-						<p class="mt-4 text-gray-400">Reconnecting...</p>
-						<p class="mt-1 text-sm text-gray-500">Session timed out, re-authenticating with BMC</p>
-					{:else}
-						<p class="mt-4 text-gray-400">Starting KVM session...</p>
-						<p class="mt-1 text-sm text-gray-500">Authenticating with BMC and launching viewer</p>
-					{/if}
+					<p class="mt-4 text-gray-400">Starting KVM session...</p>
+					<p class="mt-1 text-sm text-gray-500">Authenticating with BMC and launching viewer</p>
 				</div>
 			</div>
 		{:else if session?.status === 'connected'}

@@ -1,9 +1,12 @@
 package ikvm
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"image"
+	"image/png"
 	"log"
 	"sync"
 	"time"
@@ -29,6 +32,57 @@ type Bridge struct {
 	kbdModifiers byte
 
 	cancel context.CancelFunc
+}
+
+// --- Public command methods (called from API handlers) ---
+
+// SendPowerCommand sends a power control command to the BMC.
+// action: 0=off, 1=on, 2=cycle, 3=hard reset, 5=soft reset
+func (b *Bridge) SendPowerCommand(action byte) error {
+	if b.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	return b.client.SendHeader(IVTPPowerControlReq, 0, uint16(action))
+}
+
+// SendDisplayLock sends a display lock/unlock command.
+// lock: true=lock, false=unlock
+func (b *Bridge) SendDisplayLock(lock bool) error {
+	if b.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	cmd := byte(0) // unlock
+	if lock {
+		cmd = 1 // lock
+	}
+	// JViewer sends type 51 with pktSize=1, status=0, payload=[cmd]
+	return b.client.sendMessageWithPayload(51, 0, []byte{cmd})
+}
+
+// SetMouseMode sets the mouse input mode.
+// mode: 1=relative, 2=absolute
+func (b *Bridge) SetMouseMode(mode byte) error {
+	if b.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	return b.client.SendHeader(IVTPSetMouseMode, 0, uint16(mode))
+}
+
+// SetKeyboardLayout sends a keyboard layout change.
+// layout is the JViewer layout string (e.g. "AD"=English, "FR"=French, "DE"=German).
+func (b *Bridge) SetKeyboardLayout(layout string) error {
+	if b.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	return b.client.sendMessageWithPayload(55, 0, []byte(layout)) // IVTP_SET_KBD_LANG
+}
+
+// SendIPMICommand sends a raw IPMI command through the KVM tunnel.
+func (b *Bridge) SendIPMICommand(data []byte) error {
+	if b.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	return b.client.sendMessageWithPayload(48, 0, data) // IVTP_IPMI_REQUEST_PKT
 }
 
 // NewBridge creates a bridge between noVNC (WebSocket) and BMC (IVTP).
@@ -73,7 +127,10 @@ func (b *Bridge) Serve(ws *websocket.Conn) error {
 		errCh <- err
 	}()
 
-	// Keepalive: send periodic full-screen request to prevent BMC idle timeout
+	// Periodic refresh: request a full video frame every 30 seconds.
+	// This serves as both a keepalive AND resets any accumulated differential
+	// decoding drift (the ASPEED encoder and our decoder must stay perfectly
+	// in sync for Pass2 frames; periodic full refreshes re-baseline both sides).
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -83,7 +140,7 @@ func (b *Bridge) Serve(ws *websocket.Conn) error {
 				return
 			case <-ticker.C:
 				if b.client != nil {
-					b.client.SendHeader(IVTPGetFullScreen, 0, 0)
+					b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
 				}
 			}
 		}
@@ -111,22 +168,19 @@ func (b *Bridge) Serve(ws *websocket.Conn) error {
 
 // onVideoFrame is called by the IVTP client when a complete video frame arrives.
 func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
+	// Decode with a FRESH decoder to compare with the accumulated one
 	b.fbMu.Lock()
 	defer b.fbMu.Unlock()
 
 	if err := b.decoder.Decode(header, data); err != nil {
 		log.Printf("iKVM bridge: decode error: %v", err)
-		if b.decoder.Width > 0 {
-			b.width = b.decoder.Width
-			b.height = b.decoder.Height
-		}
 		return
 	}
 
 	b.width = b.decoder.Width
 	b.height = b.decoder.Height
-	b.fbDirty = true
 
+	b.fbDirty = true
 	select {
 	case b.frameReady <- struct{}{}:
 	default:
@@ -338,6 +392,12 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
 		if resChanged {
 			lastW = w
 			lastH = h
+			// Request a full refresh for the new resolution — the BMC's first
+			// frame after a resolution change is often a small diff that produces
+			// garbage because previousYUV was just reset to zeros.
+			if b.client != nil {
+				go b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
+			}
 		}
 
 		// Copy framebuffer while holding lock
@@ -440,4 +500,28 @@ func keysymToUSBHID(keysym uint32) (keycode byte, modifiers byte) {
 	case 0x2f: return 0x38, 0 // slash
 	}
 	return 0, 0
+}
+
+// Screenshot returns the current framebuffer as PNG bytes.
+func (b *Bridge) Screenshot() []byte {
+	b.fbMu.Lock()
+	defer b.fbMu.Unlock()
+	w, h := int(b.decoder.Width), int(b.decoder.Height)
+	if w == 0 || h == 0 || len(b.decoder.Framebuffer) < w*h*4 {
+		return nil
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	fb := b.decoder.Framebuffer
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			off := (y*w + x) * 4
+			img.Pix[(y*w+x)*4+0] = fb[off+2] // R from B
+			img.Pix[(y*w+x)*4+1] = fb[off+1] // G
+			img.Pix[(y*w+x)*4+2] = fb[off+0] // B from R
+			img.Pix[(y*w+x)*4+3] = 255
+		}
+	}
+	var buf bytes.Buffer
+	png.Encode(&buf, img)
+	return buf.Bytes()
 }
