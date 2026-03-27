@@ -40,6 +40,27 @@ type jnlpApplicationDesc struct {
 	Arguments []string `xml:"argument"`
 }
 
+// FetchKVMToken gets a KVM token using existing BMC credentials (no new web session).
+// This allows reusing the session manager's web session for KVM without consuming
+// an additional BMC session slot.
+func (m *MegaRACAuthenticator) FetchKVMToken(ctx context.Context, host string, port int, existingCreds *models.BMCCredentials) (*models.KVMConnectInfo, error) {
+	baseURL := fmt.Sprintf("http://%s:%d", host, port)
+	sessResp := &sessionResponse{
+		SessionCookie: existingCreds.SessionCookie,
+		CSRFToken:     existingCreds.CSRFToken,
+	}
+	args, err := m.getJNLP(ctx, baseURL, host, sessResp)
+	if err != nil {
+		return nil, fmt.Errorf("getting JNLP: %w", err)
+	}
+	existingCreds.KVMToken = args.KVMToken
+	existingCreds.WebCookie = args.WebCookie
+	return &models.KVMConnectInfo{
+		Mode:          models.KVMModeContainer,
+		ContainerArgs: args,
+	}, nil
+}
+
 func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, port int, username, password string) (*models.BMCCredentials, *models.KVMConnectInfo, error) {
 	baseURL := fmt.Sprintf("http://%s:%d", host, port)
 
@@ -65,7 +86,7 @@ func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, po
 	}
 
 	connectInfo := &models.KVMConnectInfo{
-		Mode:          models.KVMModeContainer,
+		Mode:          models.KVMModeContainer, // Default; overridden to KVMModeIKVM by server if native_ikvm is set
 		ContainerArgs: args,
 	}
 

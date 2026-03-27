@@ -27,6 +27,9 @@ type Settings struct {
 	KubeNamespace         string `yaml:"kube_namespace"` // default: "kvm-switcher"
 	KubeConfig            string `yaml:"kube_config"`    // path to kubeconfig; empty = in-cluster
 
+	// Native iKVM settings
+	NativeIKVM bool `yaml:"native_ikvm"` // Use native IVTP protocol instead of Docker containers for MegaRAC
+
 	// Production hardening settings
 	CORSOrigins        []string `yaml:"cors_origins"`          // default ["*"]
 	RateLimitRPM       int      `yaml:"rate_limit_rpm"`        // default 60
@@ -97,6 +100,7 @@ type KVMSession struct {
 	ConnMode      KVMMode       `json:"conn_mode,omitempty"`
 	KVMTarget     string        `json:"-"`                      // WSS URL or VNC host:port (internal only)
 	KVMPassword   string        `json:"kvm_password,omitempty"` // VNC auth password (if needed)
+	IKVMArgs      *JViewerArgs  `json:"-"`                      // Native iKVM connection args
 	CreatedAt     time.Time     `json:"created_at"`
 	LastActivity  time.Time     `json:"last_activity"`
 	Error         string        `json:"error,omitempty"`
@@ -109,6 +113,7 @@ const (
 	KVMModeContainer KVMMode = "container" // Launch a container (AMI MegaRAC JViewer)
 	KVMModeWebSocket KVMMode = "websocket" // Proxy WS → remote WSS (iDRAC9 HTML5)
 	KVMModeVNC       KVMMode = "vnc"       // Proxy WS → raw TCP VNC (iDRAC8)
+	KVMModeIKVM      KVMMode = "ikvm"      // Native IVTP protocol (AMI MegaRAC, no Docker)
 )
 
 // KVMConnectInfo describes how to reach the KVM stream for a session.

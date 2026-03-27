@@ -39,7 +39,9 @@ func main() {
 	}
 	log.Printf("Loaded %d server(s) from config", len(cfg.Servers))
 
-	// Initialize container manager based on runtime
+	// Initialize container manager based on runtime.
+	// When native_ikvm is enabled, Docker/K8s is optional since MegaRAC boards
+	// use the native IVTP protocol instead of JViewer containers.
 	var cm containermgr.Manager
 	switch cfg.Settings.Runtime {
 	case "kubernetes":
@@ -49,16 +51,24 @@ func main() {
 		log.Println("Using Docker runtime")
 		cm, err = dockermgr.NewManager(cfg.Settings.ContainerImage)
 	default:
-		log.Fatalf("Unknown runtime: %s", cfg.Settings.Runtime)
+		if !cfg.Settings.NativeIKVM {
+			log.Fatalf("Unknown runtime: %s", cfg.Settings.Runtime)
+		}
 	}
 	if err != nil {
-		log.Fatalf("Failed to initialize container runtime: %v", err)
+		if cfg.Settings.NativeIKVM {
+			log.Printf("Warning: container runtime unavailable (%v); MegaRAC boards will use native iKVM", err)
+			cm = nil // Ensure cm is nil, not a nil-wrapped interface
+		} else {
+			log.Fatalf("Failed to initialize container runtime: %v", err)
+		}
 	}
-	defer cm.Close()
-
-	// Clean up any orphaned containers from previous runs
-	if err := cm.CleanupOrphans(context.Background()); err != nil {
-		log.Printf("Warning: failed to cleanup orphans: %v", err)
+	if cm != nil {
+		defer cm.Close()
+		// Clean up any orphaned containers from previous runs
+		if err := cm.CleanupOrphans(context.Background()); err != nil {
+			log.Printf("Warning: failed to cleanup orphans: %v", err)
+		}
 	}
 
 	// Open SQLite database for audit logging and persistent sessions
@@ -220,11 +230,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Stop all active sessions
+	// Stop active sessions (skip disconnected/error sessions whose containers are already gone)
 	for _, session := range srv.Sessions.List() {
-		if session.ContainerID != "" {
+		if session.ContainerID != "" && session.Status != models.SessionDisconnected && session.Status != models.SessionError {
 			log.Printf("Stopping session %s container...", session.ID)
-			_ = cm.StopContainer(ctx, session.ContainerID)
+			if err := cm.StopContainer(ctx, session.ContainerID); err != nil {
+				log.Printf("Warning: failed to clean up session %s: %v", session.ID, err)
+			}
+			session.ContainerID = ""
+			session.Status = models.SessionDisconnected
+			srv.Sessions.Set(session)
 		}
 	}
 

@@ -210,6 +210,50 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 		return
 	}
 
+	// For native iKVM mode, use the session manager's existing web session
+	// to fetch a KVM token. This avoids creating a separate web session that
+	// the BMC might evict when session slots are full.
+	if s.Config.Settings.NativeIKVM && serverCfg.BoardType == "ami_megarac" {
+		megaAuth, ok := authenticator.(*auth.MegaRACAuthenticator)
+		if !ok {
+			session.Status = models.SessionError
+			session.Error = "authenticator type mismatch"
+			s.Sessions.Set(session)
+			return
+		}
+
+		entry := getOrCreateProxy(serverCfg, serverCfg.Name)
+		existingCreds := entry.getBMCCredentials()
+		if existingCreds == nil || existingCreds.SessionCookie == "" {
+			// No existing session — create one
+			log.Printf("Session %s: creating BMC session for %s...", session.ID, serverCfg.Name)
+			var err error
+			existingCreds, err = authenticator.CreateWebSession(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
+			if err != nil {
+				session.Status = models.SessionError
+				session.Error = "BMC authentication failed"
+				s.Sessions.Set(session)
+				return
+			}
+			entry.setBMCCredentials(existingCreds)
+		}
+
+		log.Printf("Session %s: fetching KVM token for %s using shared session...", session.ID, serverCfg.Name)
+		connectInfo, err := megaAuth.FetchKVMToken(ctx, serverCfg.BMCIP, serverCfg.BMCPort, existingCreds)
+		if err != nil {
+			log.Printf("Session %s: KVM token fetch failed: %v", session.ID, err)
+			session.Status = models.SessionError
+			session.Error = "KVM token fetch failed"
+			s.Sessions.Set(session)
+			return
+		}
+
+		session.ConnMode = models.KVMModeIKVM
+		session.IKVMArgs = connectInfo.ContainerArgs
+		s.startIKVMSession(session, connectInfo)
+		return
+	}
+
 	log.Printf("Session %s: authenticating with BMC %s...", session.ID, serverCfg.BMCIP)
 	creds, connectInfo, err := authenticator.Authenticate(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
 	if err != nil {
@@ -231,6 +275,8 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 		s.startContainerSession(ctx, session, serverCfg, authenticator, creds, connectInfo)
 	case models.KVMModeWebSocket, models.KVMModeVNC:
 		s.startDirectSession(ctx, session, serverCfg, authenticator, creds, connectInfo)
+	case models.KVMModeIKVM:
+		s.startIKVMSession(session, connectInfo)
 	default:
 		session.Status = models.SessionError
 		session.Error = "unknown KVM mode: " + string(connectInfo.Mode)
@@ -240,6 +286,13 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 
 // startContainerSession launches a JViewer container (AMI MegaRAC flow).
 func (s *Server) startContainerSession(ctx context.Context, session *models.KVMSession, serverCfg *models.ServerConfig, authenticator auth.BMCAuthenticator, creds *models.BMCCredentials, connectInfo *models.KVMConnectInfo) {
+	if s.Container == nil {
+		log.Printf("Session %s: container runtime not available", session.ID)
+		session.Status = models.SessionError
+		session.Error = "container runtime not available (enable native_ikvm for MegaRAC)"
+		s.Sessions.Set(session)
+		return
+	}
 	log.Printf("Session %s: starting container for %s...", session.ID, serverCfg.Name)
 	wsPort, err := s.Container.StartContainer(ctx, session, connectInfo.ContainerArgs)
 	if err != nil {
@@ -286,6 +339,17 @@ func (s *Server) startContainerSession(ctx context.Context, session *models.KVMS
 	session.LastActivity = time.Now()
 	s.Sessions.Set(session)
 	log.Printf("Session %s: connected to %s on port %d", session.ID, serverCfg.Name, wsPort)
+}
+
+// startIKVMSession sets up a native iKVM session (no Docker container needed).
+// The session is marked "connected" immediately since the actual BMC connection
+// happens on-demand when the WebSocket client connects. The WebSocket handler
+// authenticates fresh and establishes the IVTP tunnel.
+func (s *Server) startIKVMSession(session *models.KVMSession, _ *models.KVMConnectInfo) {
+	session.Status = models.SessionConnected
+	session.LastActivity = time.Now()
+	s.Sessions.Set(session)
+	log.Printf("Session %s: iKVM session ready (auth deferred to WebSocket connect)", session.ID)
 }
 
 // startDirectSession sets up a direct proxy session (WSS or VNC, no container).
@@ -496,6 +560,14 @@ func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) 
 	defer cancel()
 
 	entry := getOrCreateProxy(cfg, cfg.Name)
+
+	// Don't touch the session if an iKVM bridge is actively using it.
+	entry.mu.RLock()
+	active := entry.kvmActive
+	entry.mu.RUnlock()
+	if active {
+		return entry.getBMCCredentials(), nil
+	}
 
 	// Log out any existing session to prevent session buildup
 	if oldCreds := entry.getBMCCredentials(); oldCreds != nil {

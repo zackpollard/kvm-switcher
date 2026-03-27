@@ -155,3 +155,4 @@ settings:
   idle_timeout_minutes: 30
   docker_image: "kvm-switcher/jviewer:latest"
   listen_address: "0.0.0.0:8080"
+  native_ikvm: true  # Use native IVTP protocol for MegaRAC (no Docker needed, ARM compatible)

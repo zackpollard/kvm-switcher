@@ -26,6 +26,7 @@ type bmcProxyEntry struct {
 	mu        sync.RWMutex
 	bmcCreds  *models.BMCCredentials // pre-authenticated BMC session credentials
 	boardType string
+	kvmActive bool // true when an iKVM bridge is using this entry's BMC session
 }
 
 func (e *bmcProxyEntry) setBMCCredentials(creds *models.BMCCredentials) {
