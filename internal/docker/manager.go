@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 
 	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
@@ -156,15 +157,22 @@ func (m *Manager) StartContainer(ctx context.Context, session *models.KVMSession
 }
 
 // StopContainer stops and removes a KVM session container.
+// Returns nil if the container no longer exists (already cleaned up).
 func (m *Manager) StopContainer(ctx context.Context, containerID string) error {
 	timeout := 10
 	stopOptions := container.StopOptions{Timeout: &timeout}
 
 	if err := m.client.ContainerStop(ctx, containerID, stopOptions); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil // container already gone
+		}
 		log.Printf("Warning: failed to stop container %s: %v", containerID[:12], err)
 	}
 
 	if err := m.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil // container already gone
+		}
 		return fmt.Errorf("removing container %s: %w", containerID[:12], err)
 	}
 

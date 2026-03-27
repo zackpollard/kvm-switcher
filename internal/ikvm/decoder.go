@@ -8,20 +8,24 @@ import (
 )
 
 // Block type codes (top 4 bits of header word).
+// Bit 3 = skip flag, bit 0 = advance QT flag for JPEG types.
 const (
-	blockJPEGNoSkip       = 0x0
-	blockJPEGPass2NoSkip  = 0x2
-	blockLowJPEGNoSkip    = 0x4
-	blockVQ1ColorNoSkip   = 0x5
-	blockVQ2ColorNoSkip   = 0x6
-	blockVQ4ColorNoSkip   = 0x7
-	blockJPEGSkip         = 0x8
-	blockFrameEnd         = 0x9
-	blockJPEGPass2Skip    = 0xA
-	blockLowJPEGSkip      = 0xC
-	blockVQ1ColorSkip     = 0xD
-	blockVQ2ColorSkip     = 0xE
-	blockVQ4ColorSkip     = 0xF
+	blockJPEGNoSkip           = 0x0
+	blockJPEGAdvNoSkip        = 0x1 // JPEG with advance QT tables
+	blockJPEGPass2NoSkip      = 0x2
+	blockJPEGPass2AdvNoSkip   = 0x3 // JPEG Pass2 with advance QT tables
+	blockLowJPEGNoSkip        = 0x4
+	blockVQ1ColorNoSkip       = 0x5
+	blockVQ2ColorNoSkip       = 0x6
+	blockVQ4ColorNoSkip       = 0x7
+	blockJPEGSkip             = 0x8
+	blockFrameEnd             = 0x9
+	blockJPEGPass2Skip        = 0xA
+	blockJPEGPass2AdvSkip     = 0xB // JPEG Pass2 Skip with advance QT tables
+	blockLowJPEGSkip          = 0xC
+	blockVQ1ColorSkip         = 0xD
+	blockVQ2ColorSkip         = 0xE
+	blockVQ4ColorSkip         = 0xF
 )
 
 // IDCT fixed-point constants.
@@ -283,6 +287,12 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 			d.decompressJPEG(d.txb, d.tyb, 0)
 			d.moveBlockIndex()
 
+		case blockJPEGAdvNoSkip, blockJPEGPass2AdvNoSkip, blockJPEGPass2AdvSkip:
+			// These block types are not handled by JViewer either — its exception
+			// handler effectively stops frame processing. Return an error so the
+			// bridge can discard this frame's partial output.
+			return fmt.Errorf("unhandled block type 0x%X", blockType)
+
 		case blockJPEGSkip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
@@ -366,9 +376,8 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 			return nil
 
 		default:
-			// Unknown block type -- skip 3 bits and advance.
-			d.updateReadBuf(3)
-			d.moveBlockIndex()
+			// Unknown block type — stop and signal error.
+			return fmt.Errorf("unknown block type 0x%X", blockType)
 		}
 	}
 
@@ -853,6 +862,24 @@ func (d *Decoder) inverseDCT(offset int, qtIdx byte) {
 	}
 }
 
+// isNeutralBlock checks if the current yuvTile contains only the JPEG neutral
+// midpoint value (128) for all Y, Cb, and Cr samples. This indicates the ASPEED
+// encoder had no real data for this block (DC=0, no AC coefficients).
+func (d *Decoder) isNeutralBlock() bool {
+	// Check Y (0..63), Cb (64..127), Cr (128..191) in 4:4:4 mode.
+	// In 4:2:0 mode, check all 384 values (4Y + Cb + Cr).
+	count := 192
+	if d.mode420 == 1 {
+		count = 384
+	}
+	for i := 0; i < count; i++ {
+		if d.yuvTile[i] != 128 {
+			return false
+		}
+	}
+	return true
+}
+
 // --- Color conversion ---
 
 func (d *Decoder) clampByte(v int) byte {
@@ -1098,6 +1125,17 @@ func (d *Decoder) decompressJPEG(tileX, tileY int, qtOffset byte) {
 		d.decodeHuffmanDataUnit(crDCnr, crACnr, &d.dcCr, 128)
 		d.inverseDCT(128, qtOffset+1)
 	}
+
+	// Skip writing neutral blocks to the framebuffer. When the ASPEED encoder
+	// has no real data for a block (during resolution changes, initial captures,
+	// etc.), it sends DC=0 which IDCT decodes to Y=128, Cb=128, Cr=128 for all
+	// pixels. This would render as visible grey (RGB 130,130,130). By detecting
+	// these all-128 blocks and skipping the framebuffer write, we preserve the
+	// previous content (black for new buffers, or valid content from prior frames).
+	if d.isNeutralBlock() {
+		return
+	}
+
 	d.convertYUVtoRGB(tileX, tileY)
 }
 
@@ -1115,6 +1153,9 @@ func (d *Decoder) decompressJPEGPass2(tileX, tileY int, qtOffset byte) {
 	d.inverseDCT(64, qtOffset+1)
 	d.decodeHuffmanDataUnit(crDCnr, crACnr, &d.dcCr, 128)
 	d.inverseDCT(128, qtOffset+1)
+	if d.isNeutralBlock() {
+		return
+	}
 	d.convertYUVtoRGBPass2(tileX, tileY)
 }
 
@@ -1158,6 +1199,9 @@ func (d *Decoder) decompressVQ(tileX, tileY int) {
 			n++
 			d.skipKbits(d.vqBitmapBits)
 		}
+	}
+	if d.isNeutralBlock() {
+		return
 	}
 	d.convertYUVtoRGB(tileX, tileY)
 }

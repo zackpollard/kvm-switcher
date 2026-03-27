@@ -58,11 +58,12 @@ func NewSQLiteSessionStore(db *DB) (*SQLiteSessionStore, error) {
 	}
 
 	// Mark stale "starting" or "connected" sessions as "disconnected"
-	// (server was likely restarted)
+	// and clear their ContainerIDs (containers are gone after a restart).
 	count := 0
 	for _, sess := range s.cache {
 		if sess.Status == models.SessionStarting || sess.Status == models.SessionConnected {
 			sess.Status = models.SessionDisconnected
+			sess.ContainerID = ""
 			s.persistSession(sess)
 			count++
 		}

@@ -65,11 +65,11 @@
 	});
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col overflow-hidden">
 	{#if !connected}
 		<div class="bg-gray-900/80 px-3 py-1.5 text-center text-xs text-gray-400">
 			{status}
 		</div>
 	{/if}
-	<div bind:this={canvasContainer} class="flex-1"></div>
+	<div bind:this={canvasContainer} class="relative min-h-0 flex-1"></div>
 </div>
