@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmMouseMode, kvmKeyboardLayout, type KVMSession } from '$lib/api';
+	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 
@@ -79,9 +79,10 @@
 		viewerContainer?.dispatchEvent(new CustomEvent('send-ctrl-alt-del'));
 	}
 
-	async function handlePower(action: 'on' | 'off' | 'cycle' | 'reset' | 'soft_reset') {
+	async function handlePower(action: 'on' | 'off' | 'cycle' | 'reset' | 'soft_reset' | 'bmc_reset') {
 		showPowerMenu = false;
-		if (!confirm(`Are you sure you want to ${action.replace('_', ' ')} this server?`)) return;
+		const label = action === 'bmc_reset' ? 'cold reset the BMC (video/management controller)' : action.replace('_', ' ') + ' this server';
+		if (!confirm(`Are you sure you want to ${label}?`)) return;
 		try {
 			await kvmPowerControl(activeSessionId, action);
 		} catch (e) {
@@ -110,6 +111,14 @@
 			await kvmKeyboardLayout(activeSessionId, layout);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Keyboard layout change failed';
+		}
+	}
+
+	async function resetVideo() {
+		try {
+			await kvmResetVideo(activeSessionId);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Video reset failed';
 		}
 	}
 
@@ -194,6 +203,8 @@
 							<button onclick={() => handlePower('cycle')} class="block w-full px-3 py-1.5 text-left text-xs text-yellow-400 hover:bg-gray-700">Power Cycle</button>
 							<button onclick={() => handlePower('reset')} class="block w-full px-3 py-1.5 text-left text-xs text-yellow-400 hover:bg-gray-700">Hard Reset</button>
 							<button onclick={() => handlePower('soft_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-orange-400 hover:bg-gray-700">Soft Reset</button>
+							<hr class="my-1 border-gray-700" />
+							<button onclick={() => handlePower('bmc_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-purple-400 hover:bg-gray-700">BMC Cold Reset</button>
 						</div>
 					{/if}
 				</div>
@@ -203,6 +214,13 @@
 					title="Lock host display"
 				>
 					Lock Display
+				</button>
+				<button
+					onclick={resetVideo}
+					class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					title="Reset video capture engine (fixes stuck/corrupted display)"
+				>
+					Reset Video
 				</button>
 				<div class="relative">
 					<button

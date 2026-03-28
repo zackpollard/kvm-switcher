@@ -71,7 +71,7 @@ export function getKVMWebSocketURL(sessionId: string): string {
 
 // --- iKVM control commands ---
 
-export async function kvmPowerControl(sessionId: string, action: 'on' | 'off' | 'cycle' | 'reset' | 'soft_reset'): Promise<void> {
+export async function kvmPowerControl(sessionId: string, action: 'on' | 'off' | 'cycle' | 'reset' | 'soft_reset' | 'bmc_reset'): Promise<void> {
 	const res = await fetch(`${API_BASE}/sessions/${sessionId}/power`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -88,6 +88,16 @@ export async function kvmDisplayLock(sessionId: string, lock: boolean): Promise<
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ lock })
+	});
+	if (!res.ok) {
+		const err = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(err.error || res.statusText);
+	}
+}
+
+export async function kvmResetVideo(sessionId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/reset-video`, {
+		method: 'POST'
 	});
 	if (!res.ok) {
 		const err = await res.json().catch(() => ({ error: res.statusText }));

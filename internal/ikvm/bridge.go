@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/png"
 	"log"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -35,6 +36,9 @@ type Bridge struct {
 	// Resolution change tracking — discard transitional frames
 	resChangeCountdown int
 
+	// Frame capture for debugging
+	frameCount int
+
 	cancel context.CancelFunc
 }
 
@@ -61,6 +65,39 @@ func (b *Bridge) SendDisplayLock(lock bool) error {
 	}
 	// JViewer sends type 51 with pktSize=1, status=0, payload=[cmd]
 	return b.client.sendMessageWithPayload(51, 0, []byte{cmd})
+}
+
+// ResetVideo sends a pause/resume cycle to reset the BMC's video capture engine.
+// This forces the ASPEED video engine to re-detect the host display resolution
+// and start a fresh capture. JViewer uses the same approach (Video → Pause/Resume).
+func (b *Bridge) ResetVideo() error {
+	if b.client == nil {
+		return fmt.Errorf("not connected")
+	}
+	// Pause redirection (type 4) — stops video capture
+	if err := b.client.SendHeader(IVTPPauseRedirection, 0, 0); err != nil {
+		return fmt.Errorf("sending pause: %w", err)
+	}
+	// Resume redirection (type 6) — restarts video capture with fresh mode detection
+	if err := b.client.SendHeader(IVTPResumeRedirection, 0, 0); err != nil {
+		return fmt.Errorf("sending resume: %w", err)
+	}
+	// Request full screen refresh
+	b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
+	return nil
+}
+
+// BMCColdReset sends an IPMI cold reset to the BMC controller.
+// This restarts the BMC firmware (including the video engine) without
+// affecting the host machine's power state.
+func (b *Bridge) BMCColdReset(bmcIP, username, password string) error {
+	out, err := exec.Command("ipmitool", "-I", "lanplus",
+		"-H", bmcIP, "-U", username, "-P", password,
+		"mc", "reset", "cold").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("BMC cold reset failed: %s: %w", string(out), err)
+	}
+	return nil
 }
 
 // SetMouseMode sets the mouse input mode.
@@ -175,12 +212,13 @@ func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 	b.fbMu.Lock()
 	defer b.fbMu.Unlock()
 
+	b.frameCount++
+
 	prevW, prevH := b.width, b.height
 
 	if err := b.decoder.Decode(header, data); err != nil {
-		// Frame had unhandled block types — partial content was written to the
-		// framebuffer. Request a full refresh so the BMC sends a complete frame
-		// that overwrites any partial artifacts.
+		// Frame had advance block types that stopped processing. Request a
+		// refresh so the BMC sends a full frame to fill in any stale blocks.
 		if b.client != nil {
 			go b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
 		}
@@ -197,8 +235,14 @@ func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 	// We clear the framebuffer for a few frames after each resolution change while
 	// still decoding (to keep the decoder's internal state current for subsequent
 	// differential frames).
+	// Discard transitional frames on resolution changes, but NOT on the initial
+	// frame (frameCount==1). The first frames after connect have valid content
+	// that must not be discarded. Only subsequent resolution changes (e.g. BIOS
+	// POST switching modes) produce transitional garbage.
 	if b.width != prevW || b.height != prevH {
-		b.resChangeCountdown = 3
+		if b.frameCount > 1 {
+			b.resChangeCountdown = 3
+		}
 		if b.client != nil {
 			go b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
 		}

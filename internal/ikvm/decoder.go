@@ -239,7 +239,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 	d.vqColor[2] = 0x808080
 	d.vqColor[3] = 0xC08080
 
-	// Setup quantization tables from header parameters.
+	// Setup quantization tables. JViewer hardcodes all scale factors to 16.
 	d.scaleFactor = 16
 	d.scaleFactorUV = 16
 	d.advScaleFactor = 16
@@ -277,30 +277,76 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 
 	compressWords := int(header.CompressSize) / 4
 
+	// Track block positions written during this frame. If we hit an advance
+	// block type, restore just these blocks to undo partial writes without
+	// affecting the rest of the framebuffer.
+	type savedBlock struct {
+		offset int
+		pixels [8 * 8 * 4]byte
+	}
+	var savedBlocks []savedBlock
+
+	saveBlock := func(tileX, tileY int) {
+		blockSize := 8
+		pixX, pixY := tileX*blockSize, tileY*blockSize
+		fbW := int(d.Width)
+		var sb savedBlock
+		sb.offset = (pixY*fbW + pixX) * 4
+		for row := 0; row < blockSize; row++ {
+			for col := 0; col < blockSize; col++ {
+				idx := ((pixY+row)*fbW + pixX + col) * 4
+				bIdx := (row*blockSize + col) * 4
+				if idx+3 < len(d.Framebuffer) {
+					copy(sb.pixels[bIdx:bIdx+4], d.Framebuffer[idx:idx+4])
+				}
+			}
+		}
+		savedBlocks = append(savedBlocks, sb)
+	}
+
+	restoreBlocks := func() {
+		blockSize := 8
+		fbW := int(d.Width)
+		for _, sb := range savedBlocks {
+			pixX := (sb.offset / 4) % fbW
+			pixY := (sb.offset / 4) / fbW
+			for row := 0; row < blockSize; row++ {
+				for col := 0; col < blockSize; col++ {
+					idx := ((pixY+row)*fbW + pixX + col) * 4
+					bIdx := (row*blockSize + col) * 4
+					if idx+3 < len(d.Framebuffer) {
+						copy(d.Framebuffer[idx:idx+4], sb.pixels[bIdx:bIdx+4])
+					}
+				}
+			}
+		}
+	}
+
 	// Process macroblocks.
 	for d.index < compressWords {
 		blockType := d.reg0 >> 28
 
 		switch blockType {
 		case blockJPEGNoSkip:
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(4)
 			d.decompressJPEG(d.txb, d.tyb, 0)
 			d.moveBlockIndex()
 
 		case blockJPEGAdvNoSkip, blockJPEGPass2AdvNoSkip, blockJPEGPass2AdvSkip:
-			// These block types are not handled by JViewer either — its exception
-			// handler effectively stops frame processing. Return an error so the
-			// bridge can discard this frame's partial output.
-			return fmt.Errorf("unhandled block type 0x%X", blockType)
+			restoreBlocks()
+			return fmt.Errorf("advance block type 0x%X", blockType)
 
 		case blockJPEGSkip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(20)
 			d.decompressJPEG(d.txb, d.tyb, 0)
 			d.moveBlockIndex()
 
 		case blockJPEGPass2NoSkip:
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(4)
 			d.decompressJPEGPass2(d.txb, d.tyb, 2)
 			d.moveBlockIndex()
@@ -308,11 +354,13 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 		case blockJPEGPass2Skip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(20)
 			d.decompressJPEGPass2(d.txb, d.tyb, 2)
 			d.moveBlockIndex()
 
 		case blockLowJPEGNoSkip:
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(4)
 			d.decompressJPEG(d.txb, d.tyb, 2)
 			d.moveBlockIndex()
@@ -320,11 +368,13 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 		case blockLowJPEGSkip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(20)
 			d.decompressJPEG(d.txb, d.tyb, 2)
 			d.moveBlockIndex()
 
 		case blockVQ1ColorNoSkip:
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(4)
 			d.vqBitmapBits = 0
 			d.decodeVQHeader(1)
@@ -334,6 +384,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 		case blockVQ1ColorSkip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(20)
 			d.vqBitmapBits = 0
 			d.decodeVQHeader(1)
@@ -341,6 +392,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 			d.moveBlockIndex()
 
 		case blockVQ2ColorNoSkip:
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(4)
 			d.vqBitmapBits = 1
 			d.decodeVQHeader(2)
@@ -350,6 +402,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 		case blockVQ2ColorSkip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(20)
 			d.vqBitmapBits = 1
 			d.decodeVQHeader(2)
@@ -357,6 +410,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 			d.moveBlockIndex()
 
 		case blockVQ4ColorNoSkip:
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(4)
 			d.vqBitmapBits = 2
 			d.decodeVQHeader(4)
@@ -366,6 +420,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 		case blockVQ4ColorSkip:
 			d.txb = int((d.reg0 & 0x0FF00000) >> 20)
 			d.tyb = int((d.reg0 & 0x000FF000) >> 12)
+			saveBlock(d.txb, d.tyb)
 			d.updateReadBuf(20)
 			d.vqBitmapBits = 2
 			d.decodeVQHeader(4)
@@ -376,7 +431,7 @@ func (d *Decoder) Decode(header *ASPEEDVideoHeader, compressedData []byte) (retE
 			return nil
 
 		default:
-			// Unknown block type — stop and signal error.
+			// Truly unknown block type — stop processing.
 			return fmt.Errorf("unknown block type 0x%X", blockType)
 		}
 	}
@@ -880,6 +935,37 @@ func (d *Decoder) isNeutralBlock() bool {
 	return true
 }
 
+// updatePreviousYUV stores the current yuvTile values into previousYUV without
+// writing to the framebuffer. This keeps previousYUV in sync for Pass2 blocks
+// even when we skip rendering neutral blocks.
+func (d *Decoder) updatePreviousYUV(tileX, tileY int) {
+	if d.mode420 == 0 {
+		pixX := tileX * 8
+		pixY := tileY * 8
+		for row := 0; row < 8; row++ {
+			py := pixY + row
+			if py >= d.realHeight {
+				break
+			}
+			for col := 0; col < 8; col++ {
+				px := pixX + col
+				if px >= d.realWidth {
+					break
+				}
+				tileIdx := row*8 + col
+				yuvIdx := (py*d.realWidth + px) * 3
+				if yuvIdx+2 < len(d.previousYUV) {
+					d.previousYUV[yuvIdx] = d.yuvTile[tileIdx]
+					d.previousYUV[yuvIdx+1] = d.yuvTile[64+tileIdx]
+					d.previousYUV[yuvIdx+2] = d.yuvTile[128+tileIdx]
+				}
+			}
+		}
+	}
+	// 4:2:0 mode: previousYUV is not used for pass2 in 16x16 blocks,
+	// so no update needed.
+}
+
 // --- Color conversion ---
 
 func (d *Decoder) clampByte(v int) byte {
@@ -1127,12 +1213,11 @@ func (d *Decoder) decompressJPEG(tileX, tileY int, qtOffset byte) {
 	}
 
 	// Skip writing neutral blocks to the framebuffer. When the ASPEED encoder
-	// has no real data for a block (during resolution changes, initial captures,
-	// etc.), it sends DC=0 which IDCT decodes to Y=128, Cb=128, Cr=128 for all
-	// pixels. This would render as visible grey (RGB 130,130,130). By detecting
-	// these all-128 blocks and skipping the framebuffer write, we preserve the
-	// previous content (black for new buffers, or valid content from prior frames).
+	// has no real data for a block, it sends DC=0 which IDCT decodes to Y=128,
+	// Cb=128, Cr=128. We skip the framebuffer write to avoid visible grey, but
+	// still update previousYUV so Pass2 differential blocks stay in sync.
 	if d.isNeutralBlock() {
+		d.updatePreviousYUV(tileX, tileY)
 		return
 	}
 
@@ -1154,6 +1239,7 @@ func (d *Decoder) decompressJPEGPass2(tileX, tileY int, qtOffset byte) {
 	d.decodeHuffmanDataUnit(crDCnr, crACnr, &d.dcCr, 128)
 	d.inverseDCT(128, qtOffset+1)
 	if d.isNeutralBlock() {
+		d.updatePreviousYUV(tileX, tileY)
 		return
 	}
 	d.convertYUVtoRGBPass2(tileX, tileY)
@@ -1201,6 +1287,7 @@ func (d *Decoder) decompressVQ(tileX, tileY int) {
 		}
 	}
 	if d.isNeutralBlock() {
+		d.updatePreviousYUV(tileX, tileY)
 		return
 	}
 	d.convertYUVtoRGB(tileX, tileY)

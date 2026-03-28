@@ -7,8 +7,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"sync"
 	"net/url"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -802,6 +803,36 @@ func (s *Server) KVMPowerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// BMC cold reset is handled via IPMI, not the IVTP power command
+	if req.Action == "bmc_reset" {
+		session, _ := s.Sessions.Get(id)
+		if session == nil {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		// Look up server config to get IPMI credentials
+		var serverCfg *models.ServerConfig
+		for i := range s.Config.Servers {
+			if s.Config.Servers[i].Name == session.ServerName {
+				serverCfg = &s.Config.Servers[i]
+				break
+			}
+		}
+		if serverCfg == nil {
+			writeError(w, http.StatusNotFound, "server config not found")
+			return
+		}
+		password := os.Getenv(serverCfg.CredentialEnv)
+		if err := bridge.BMCColdReset(session.BMCIP, serverCfg.Username, password); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		log.Printf("KVM BMC cold reset: %s (session %s)", session.ServerName, id)
+		s.logAudit("kvm_bmc_reset", "", session.ServerName, id, r.RemoteAddr, nil)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": req.Action})
+		return
+	}
+
 	var code byte
 	switch req.Action {
 	case "off":
@@ -815,7 +846,7 @@ func (s *Server) KVMPowerControl(w http.ResponseWriter, r *http.Request) {
 	case "soft_reset":
 		code = 5
 	default:
-		writeError(w, http.StatusBadRequest, "invalid action: must be on/off/cycle/reset/soft_reset")
+		writeError(w, http.StatusBadRequest, "invalid action: must be on/off/cycle/reset/soft_reset/bmc_reset")
 		return
 	}
 
@@ -857,6 +888,23 @@ func (s *Server) KVMDisplayLock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "lock": req.Lock})
+}
+
+// KVMResetVideo sends a pause/resume cycle to reset the BMC's video capture engine.
+// POST /api/sessions/{id}/reset-video
+func (s *Server) KVMResetVideo(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	bridge := s.getBridge(id)
+	if bridge == nil {
+		writeError(w, http.StatusNotFound, "no active KVM bridge for this session")
+		return
+	}
+
+	if err := bridge.ResetVideo(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 // KVMMouseMode sets the mouse input mode.

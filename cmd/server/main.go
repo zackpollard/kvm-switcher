@@ -163,6 +163,7 @@ func main() {
 		mux.HandleFunc("GET /api/audit-log", srv.GetAuditLog)
 		mux.HandleFunc("POST /api/sessions/{id}/power", srv.KVMPowerControl)
 		mux.HandleFunc("POST /api/sessions/{id}/display-lock", srv.KVMDisplayLock)
+		mux.HandleFunc("POST /api/sessions/{id}/reset-video", srv.KVMResetVideo)
 		mux.HandleFunc("POST /api/sessions/{id}/mouse-mode", srv.KVMMouseMode)
 		mux.HandleFunc("POST /api/sessions/{id}/keyboard-layout", srv.KVMKeyboardLayout)
 		mux.HandleFunc("POST /api/sessions/{id}/ipmi", srv.KVMIPMICommand)
