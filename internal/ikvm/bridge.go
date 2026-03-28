@@ -15,31 +15,45 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Bridge connects a noVNC WebSocket client to a BMC via the native IVTP protocol.
-// It acts as a VNC/RFB server on the WebSocket side and an IVTP client on the BMC side.
+// Bridge connects noVNC WebSocket clients to a BMC via the native IVTP protocol.
+// The bridge runs independently of WebSocket clients: Start() connects to the BMC
+// and decodes frames into a framebuffer, and ServeWebSocket() attaches a VNC client
+// to read that framebuffer and forward input. Multiple clients can attach/detach
+// over the bridge's lifetime.
 type Bridge struct {
 	cfg     ClientConfig
 	client  *Client
 	decoder *Decoder
 
-	// VNC state
-	width       uint16
-	height      uint16
-	fbMu           sync.Mutex
-	fbDirty        bool
-	frameReady     chan struct{} // signals from video frame callback
-	
+	// VNC state (protected by fbMu)
+	width  uint16
+	height uint16
+	fbMu   sync.Mutex
+	// fbDirty is set when a new frame has been decoded and not yet consumed
+	// by any WebSocket client. Each client tracks its own dirty state via
+	// the frameReady broadcast channel.
+	fbDirty    bool
+	frameReady chan struct{} // signals from video frame callback
 
-	// Keyboard state — USB HID uses cumulative modifier tracking
+	// Keyboard state -- USB HID uses cumulative modifier tracking
 	kbdModifiers byte
 
-	// Resolution change tracking — discard transitional frames
+	// Resolution change tracking -- discard transitional frames
 	resChangeCountdown int
 
 	// Frame capture for debugging
 	frameCount int
 
+	// Lifecycle
+	ctx    context.Context
 	cancel context.CancelFunc
+	// running is true between Start() returning nil and Stop() completing.
+	running bool
+	// ready is closed when the first frame has been decoded, signalling that
+	// width/height are valid and ServeWebSocket can send ServerInit.
+	ready   chan struct{}
+	runMu   sync.Mutex // protects running, ready
+	stopWg  sync.WaitGroup
 }
 
 // --- Public command methods (called from API handlers) ---
@@ -69,16 +83,16 @@ func (b *Bridge) SendDisplayLock(lock bool) error {
 
 // ResetVideo sends a pause/resume cycle to reset the BMC's video capture engine.
 // This forces the ASPEED video engine to re-detect the host display resolution
-// and start a fresh capture. JViewer uses the same approach (Video → Pause/Resume).
+// and start a fresh capture. JViewer uses the same approach (Video -> Pause/Resume).
 func (b *Bridge) ResetVideo() error {
 	if b.client == nil {
 		return fmt.Errorf("not connected")
 	}
-	// Pause redirection (type 4) — stops video capture
+	// Pause redirection (type 4) -- stops video capture
 	if err := b.client.SendHeader(IVTPPauseRedirection, 0, 0); err != nil {
 		return fmt.Errorf("sending pause: %w", err)
 	}
-	// Resume redirection (type 6) — restarts video capture with fresh mode detection
+	// Resume redirection (type 6) -- restarts video capture with fresh mode detection
 	if err := b.client.SendHeader(IVTPResumeRedirection, 0, 0); err != nil {
 		return fmt.Errorf("sending resume: %w", err)
 	}
@@ -134,50 +148,67 @@ func NewBridge(cfg ClientConfig) *Bridge {
 		width:      800,
 		height:     600,
 		frameReady: make(chan struct{}, 4),
+		ready:      make(chan struct{}),
 	}
 }
 
-// Serve handles a noVNC WebSocket connection, bridging it to the BMC.
-// Blocks until the connection closes.
-func (b *Bridge) Serve(ws *websocket.Conn) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	b.cancel = cancel
-	defer cancel()
+// Running returns whether the bridge background loop is active.
+func (b *Bridge) Running() bool {
+	b.runMu.Lock()
+	defer b.runMu.Unlock()
+	return b.running
+}
 
-	// Phase 1: VNC handshake with noVNC (before BMC connect, so the browser gets a response quickly)
-	if err := b.vncHandshake(ws); err != nil {
-		return fmt.Errorf("VNC handshake: %w", err)
+// Start connects to the BMC via IVTP and starts the background read loop
+// and periodic refresh. It runs independently of any WebSocket client.
+// Returns nil once the BMC connection is established and the session loop
+// is running. The bridge keeps running until Stop() is called or the BMC
+// connection drops.
+func (b *Bridge) Start(ctx context.Context) error {
+	b.runMu.Lock()
+	if b.running {
+		b.runMu.Unlock()
+		return nil // already running
 	}
 
-	// Phase 2: Connect to BMC via IVTP
+	b.ctx, b.cancel = context.WithCancel(ctx)
+	b.runMu.Unlock()
+
+	// Connect to BMC via IVTP
 	b.client = NewClient(b.cfg)
 	b.client.OnVideoFrame = b.onVideoFrame
 
 	if err := b.client.Connect(); err != nil {
 		return fmt.Errorf("IVTP connect: %w", err)
 	}
-	defer b.client.Stop()
 
-	// Phase 3: Run goroutines
-	errCh := make(chan error, 3)
+	b.runMu.Lock()
+	b.running = true
+	b.runMu.Unlock()
 
 	// IVTP session (BMC reader loop)
+	b.stopWg.Add(1)
 	go func() {
+		defer b.stopWg.Done()
 		err := b.client.RunSession()
 		log.Printf("iKVM bridge: IVTP session ended: %v", err)
-		errCh <- err
+		// If the BMC session dies, cancel the bridge context so all
+		// goroutines (refresh ticker, attached WS clients) stop.
+		b.cancel()
 	}()
 
 	// Periodic refresh: request a full video frame every 30 seconds.
 	// This serves as both a keepalive AND resets any accumulated differential
 	// decoding drift (the ASPEED encoder and our decoder must stay perfectly
 	// in sync for Pass2 frames; periodic full refreshes re-baseline both sides).
+	b.stopWg.Add(1)
 	go func() {
+		defer b.stopWg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-b.ctx.Done():
 				return
 			case <-ticker.C:
 				if b.client != nil {
@@ -187,24 +218,94 @@ func (b *Bridge) Serve(ws *websocket.Conn) error {
 		}
 	}()
 
-	// VNC client → BMC (keyboard/mouse input reader)
+	log.Printf("iKVM bridge: background session started (host=%s)", b.cfg.Host)
+	return nil
+}
+
+// Stop shuts down the bridge: cancels the context, stops the IVTP client,
+// and waits for background goroutines to finish.
+func (b *Bridge) Stop() {
+	b.runMu.Lock()
+	if !b.running {
+		b.runMu.Unlock()
+		return
+	}
+	b.runMu.Unlock()
+
+	log.Printf("iKVM bridge: stopping background session")
+	b.cancel()
+	if b.client != nil {
+		b.client.Stop()
+	}
+	b.stopWg.Wait()
+
+	b.runMu.Lock()
+	b.running = false
+	// Reset ready channel for potential re-start
+	b.ready = make(chan struct{})
+	b.runMu.Unlock()
+
+	log.Printf("iKVM bridge: background session stopped")
+}
+
+// ServeWebSocket handles a noVNC WebSocket client. It performs the VNC
+// handshake, then loops sending framebuffer updates and reading input.
+// Blocks until the WebSocket closes or the bridge context is cancelled.
+// Multiple clients can be served over the bridge's lifetime (sequentially
+// or concurrently).
+func (b *Bridge) ServeWebSocket(ws *websocket.Conn) error {
+	if !b.Running() {
+		return fmt.Errorf("bridge not running")
+	}
+
+	// Wait for the bridge to be ready (first frame decoded) so we can
+	// send the correct resolution in ServerInit. Time out after 30s.
+	select {
+	case <-b.ready:
+	case <-b.ctx.Done():
+		return fmt.Errorf("bridge stopped before ready")
+	case <-time.After(30 * time.Second):
+		// Proceed with default 800x600 -- noVNC will get a DesktopSize
+		// update once the first real frame arrives.
+		log.Printf("iKVM bridge: timed out waiting for first frame, proceeding with default resolution")
+	}
+
+	// VNC handshake with noVNC
+	if err := b.vncHandshake(ws); err != nil {
+		return fmt.Errorf("VNC handshake: %w", err)
+	}
+
+	// Run input reader and frame sender in parallel, scoped to this WS client.
+	// Use the bridge's context so that if the bridge stops, these goroutines stop too.
+	errCh := make(chan error, 2)
+
+	// VNC client -> BMC (keyboard/mouse input reader)
 	go func() {
-		errCh <- b.readVNCInput(ctx, ws)
+		errCh <- b.readVNCInput(b.ctx, ws)
 	}()
 
-	// BMC → VNC client (video frame sender)
+	// BMC -> VNC client (video frame sender)
 	go func() {
-		errCh <- b.sendVNCFrames(ctx, ws)
+		errCh <- b.sendVNCFrames(b.ctx, ws)
 	}()
 
-	// Wait for first error
+	// Wait for first error (WS close or bridge shutdown)
 	err := <-errCh
-	cancel()
-
 	if err != nil {
-		log.Printf("iKVM bridge: shutting down: %v", err)
+		log.Printf("iKVM bridge: WebSocket client disconnected: %v", err)
 	}
 	return err
+}
+
+// Serve is the legacy entry point that combines Start + ServeWebSocket + Stop.
+// It connects to the BMC, serves a single WebSocket client, and stops when
+// the client disconnects. Preserved for backward compatibility.
+func (b *Bridge) Serve(ws *websocket.Conn) error {
+	if err := b.Start(context.Background()); err != nil {
+		return err
+	}
+	defer b.Stop()
+	return b.ServeWebSocket(ws)
 }
 
 // onVideoFrame is called by the IVTP client when a complete video frame arrives.
@@ -259,6 +360,16 @@ func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 	case b.frameReady <- struct{}{}:
 	default:
 	}
+
+	// Signal readiness on the first successfully decoded frame.
+	b.runMu.Lock()
+	select {
+	case <-b.ready:
+		// Already closed
+	default:
+		close(b.ready)
+	}
+	b.runMu.Unlock()
 }
 
 // vncHandshake performs the RFB protocol handshake over WebSocket.
@@ -266,37 +377,37 @@ func (b *Bridge) vncHandshake(ws *websocket.Conn) error {
 	ws.SetReadDeadline(time.Now().Add(30 * time.Second))
 	defer ws.SetReadDeadline(time.Time{})
 
-	// 1. Server → Client: ProtocolVersion
+	// 1. Server -> Client: ProtocolVersion
 	if err := ws.WriteMessage(websocket.BinaryMessage, []byte("RFB 003.008\n")); err != nil {
 		return fmt.Errorf("sending version: %w", err)
 	}
 
-	// 2. Client → Server: ProtocolVersion
+	// 2. Client -> Server: ProtocolVersion
 	if _, _, err := ws.ReadMessage(); err != nil {
 		return fmt.Errorf("reading client version: %w", err)
 	}
 
-	// 3. Server → Client: Security types (None only)
+	// 3. Server -> Client: Security types (None only)
 	if err := ws.WriteMessage(websocket.BinaryMessage, []byte{1, 1}); err != nil {
 		return fmt.Errorf("sending security types: %w", err)
 	}
 
-	// 4. Client → Server: Security type selection
+	// 4. Client -> Server: Security type selection
 	if _, _, err := ws.ReadMessage(); err != nil {
 		return fmt.Errorf("reading security selection: %w", err)
 	}
 
-	// 5. Server → Client: SecurityResult (0 = OK)
+	// 5. Server -> Client: SecurityResult (0 = OK)
 	if err := ws.WriteMessage(websocket.BinaryMessage, make([]byte, 4)); err != nil {
 		return fmt.Errorf("sending security result: %w", err)
 	}
 
-	// 6. Client → Server: ClientInit
+	// 6. Client -> Server: ClientInit
 	if _, _, err := ws.ReadMessage(); err != nil {
 		return fmt.Errorf("reading ClientInit: %w", err)
 	}
 
-	// 7. Server → Client: ServerInit
+	// 7. Server -> Client: ServerInit
 	if err := ws.WriteMessage(websocket.BinaryMessage, b.buildServerInit()); err != nil {
 		return fmt.Errorf("sending ServerInit: %w", err)
 	}
@@ -339,7 +450,7 @@ func (b *Bridge) readVNCInput(ctx context.Context, ws *websocket.Conn) error {
 		default:
 		}
 
-		// No read deadline — the connection stays open as long as the browser tab is open.
+		// No read deadline -- the connection stays open as long as the browser tab is open.
 		// noVNC sends FramebufferUpdateRequests and mouse/key events; idle periods are normal.
 		_, data, err := ws.ReadMessage()
 		if err != nil {
@@ -353,9 +464,9 @@ func (b *Bridge) readVNCInput(ctx context.Context, ws *websocket.Conn) error {
 		}
 
 		switch data[0] {
-		case 0: // SetPixelFormat — accept but ignore, we always send our format
-		case 2: // SetEncodings — accept but ignore, we always use Raw
-		case 3: // FramebufferUpdateRequest — acknowledged, frames sent on arrival
+		case 0: // SetPixelFormat -- accept but ignore, we always send our format
+		case 2: // SetEncodings -- accept but ignore, we always use Raw
+		case 3: // FramebufferUpdateRequest -- acknowledged, frames sent on arrival
 		case 4: // KeyEvent
 			if len(data) >= 8 {
 				b.handleKeyEvent(data)
@@ -369,7 +480,7 @@ func (b *Bridge) readVNCInput(ctx context.Context, ws *websocket.Conn) error {
 }
 
 // handleKeyEvent translates a VNC KeyEvent to IVTP keyboard HID.
-// USB HID keyboard reports use cumulative modifier state — modifiers are
+// USB HID keyboard reports use cumulative modifier state -- modifiers are
 // set on press and cleared on release. Regular keys send the keycode on
 // press and 0 on release.
 func (b *Bridge) handleKeyEvent(data []byte) {
@@ -380,7 +491,7 @@ func (b *Bridge) handleKeyEvent(data []byte) {
 	keysym := binary.BigEndian.Uint32(data[4:8])
 	keycode, modBit := keysymToUSBHID(keysym)
 
-	// Handle modifier keys — update cumulative state
+	// Handle modifier keys -- update cumulative state
 	if modBit != 0 && keycode == 0 {
 		if pressed {
 			b.kbdModifiers |= modBit
@@ -423,7 +534,7 @@ func (b *Bridge) handlePointerEvent(data []byte) {
 	absX := uint16(uint32(x) * 32767 / uint32(w))
 	absY := uint16(uint32(y) * 32767 / uint32(h))
 
-	// VNC button mask → USB HID buttons
+	// VNC button mask -> USB HID buttons
 	usbButtons := byte(0)
 	if buttons&1 != 0 { usbButtons |= 1 } // left
 	if buttons&2 != 0 { usbButtons |= 4 } // middle
@@ -466,7 +577,7 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
 		if resChanged {
 			lastW = w
 			lastH = h
-			// Request a full refresh for the new resolution — the BMC's first
+			// Request a full refresh for the new resolution -- the BMC's first
 			// frame after a resolution change is often a small diff that produces
 			// garbage because previousYUV was just reset to zeros.
 			if b.client != nil {
@@ -577,6 +688,7 @@ func keysymToUSBHID(keysym uint32) (keycode byte, modifiers byte) {
 }
 
 // Screenshot returns the current framebuffer as PNG bytes.
+// Works anytime the bridge is running, not just when a WebSocket is connected.
 func (b *Bridge) Screenshot() []byte {
 	b.fbMu.Lock()
 	defer b.fbMu.Unlock()

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
@@ -427,13 +428,18 @@ func rewriteVNCServerInit(sessionID string, data []byte) []byte {
 }
 
 // proxyIKVM bridges a browser WebSocket to a BMC using the native IVTP protocol.
-// This replaces the Docker container approach for AMI MegaRAC boards — no JViewer,
+// This replaces the Docker container approach for AMI MegaRAC boards -- no JViewer,
 // no Xvfb, no x11vnc. The Go process speaks the BMC's IVTP protocol directly and
 // translates it to VNC/RFB for noVNC.
+//
+// The bridge runs independently of WebSocket clients. On the first WebSocket
+// connection it creates and starts the bridge (BMC connection, IVTP read loop,
+// periodic refresh). Subsequent reconnections reuse the running bridge. The
+// bridge is only torn down when the session is explicitly destroyed.
 func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
-	log.Printf("Session %s: starting native iKVM bridge to %s (args=%v)", session.ID, session.BMCIP, session.IKVMArgs != nil)
+	log.Printf("Session %s: iKVM WebSocket connect (bridge running=%v)", session.ID, s.ikvmBridgeRunning(session.ID))
 
-	// Upgrade to WebSocket FIRST — before any slow BMC auth — so the browser
+	// Upgrade to WebSocket FIRST -- before any slow BMC auth -- so the browser
 	// has an established connection and doesn't time out / trigger reconnect.
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -442,12 +448,38 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 	}
 	defer clientConn.Close()
 
-	// Use the tokens stored at session creation time — no re-authentication.
-	// This matches the container approach: authenticate once, reuse tokens.
+	// Ensure the background bridge is running (creates + starts it on first call).
+	bridge, err := s.ensureIKVMBridge(session)
+	if err != nil {
+		log.Printf("Session %s: iKVM bridge start failed: %v", session.ID, err)
+		return
+	}
+
+	// Serve this WebSocket client. Blocks until the client disconnects or the
+	// bridge shuts down. The bridge itself keeps running after this returns.
+	if err := bridge.ServeWebSocket(clientConn); err != nil {
+		log.Printf("Session %s: iKVM WebSocket error: %v", session.ID, err)
+	}
+	log.Printf("Session %s: iKVM WebSocket disconnected", session.ID)
+}
+
+// ensureIKVMBridge returns the running bridge for the session, creating and
+// starting one if it doesn't exist yet or has stopped.
+func (s *Server) ensureIKVMBridge(session *models.KVMSession) (*ikvm.Bridge, error) {
+	s.bridgesMu.Lock()
+	bridge := s.Bridges[session.ID]
+	if bridge != nil && bridge.Running() {
+		s.bridgesMu.Unlock()
+		return bridge, nil
+	}
+	// Need to create a new bridge -- release the lock during the (potentially slow)
+	// BMC connect, but mark that we're working on it.
+	s.bridgesMu.Unlock()
+
+	// Use the tokens stored at session creation time -- no re-authentication.
 	args := session.IKVMArgs
 	if args == nil {
-		log.Printf("Session %s: no iKVM args (session may have been created before tokens were stored)", session.ID)
-		return
+		return nil, fmt.Errorf("no iKVM args (session may have been created before tokens were stored)")
 	}
 
 	// Look up the server config to find the proxy entry
@@ -460,10 +492,8 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 	}
 
 	// Mark the BMC session as KVM-active so the session manager won't logout/renew it.
-	// The KVM tunnel depends on this web session staying alive.
-	var entry *bmcProxyEntry
 	if serverCfg != nil {
-		entry = getOrCreateProxy(serverCfg, serverCfg.Name)
+		entry := getOrCreateProxy(serverCfg, serverCfg.Name)
 		entry.mu.Lock()
 		entry.kvmActive = true
 		entry.mu.Unlock()
@@ -478,8 +508,7 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 		fmt.Sscanf(args.KVMPort, "%d", &kvmPort)
 	}
 
-	// Create and start the iKVM bridge with fresh tokens
-	bridge := ikvm.NewBridge(ikvm.ClientConfig{
+	bridge = ikvm.NewBridge(ikvm.ClientConfig{
 		Host:          args.Hostname,
 		Port:          kvmPort,
 		WebSecurePort: webSecPort,
@@ -488,33 +517,62 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 		UseSSL:        args.KVMSecure == "1",
 	})
 
-	// Register bridge so API endpoints can send commands through it.
+	// Start the background bridge (connects to BMC, starts read loop).
+	if err := bridge.Start(context.Background()); err != nil {
+		// Clear KVM-active on failure
+		if serverCfg != nil {
+			entry := getOrCreateProxy(serverCfg, serverCfg.Name)
+			entry.mu.Lock()
+			entry.kvmActive = false
+			entry.mu.Unlock()
+		}
+		return nil, fmt.Errorf("IVTP start: %w", err)
+	}
+
+	// Register bridge so API endpoints (power, screenshot, etc.) can use it.
 	s.bridgesMu.Lock()
 	s.Bridges[session.ID] = bridge
 	s.bridgesMu.Unlock()
 
-	log.Printf("Session %s: iKVM bridge started", session.ID)
-	if err := bridge.Serve(clientConn); err != nil {
-		log.Printf("Session %s: iKVM bridge error: %v", session.ID, err)
-		if sess, ok := s.Sessions.Get(session.ID); ok {
-			sess.Status = models.SessionError
-			sess.Error = err.Error()
-			s.Sessions.Set(sess)
-		}
-	}
-	log.Printf("Session %s: iKVM bridge closed", session.ID)
+	log.Printf("Session %s: iKVM background bridge started", session.ID)
+	return bridge, nil
+}
 
-	// Unregister bridge.
+// StopIKVMBridge stops and removes the iKVM bridge for a session.
+// Called when the session is destroyed.
+func (s *Server) StopIKVMBridge(sessionID string) {
 	s.bridgesMu.Lock()
-	delete(s.Bridges, session.ID)
+	bridge := s.Bridges[sessionID]
+	delete(s.Bridges, sessionID)
 	s.bridgesMu.Unlock()
 
-	// Clear KVM-active flag so the session manager can resume normal operation.
-	if entry != nil {
-		entry.mu.Lock()
-		entry.kvmActive = false
-		entry.mu.Unlock()
+	if bridge == nil {
+		return
 	}
+
+	bridge.Stop()
+
+	// Clear KVM-active flag so the session manager can resume normal operation.
+	if session, ok := s.Sessions.Get(sessionID); ok {
+		for i := range s.Config.Servers {
+			if s.Config.Servers[i].Name == session.ServerName {
+				entry := getOrCreateProxy(&s.Config.Servers[i], s.Config.Servers[i].Name)
+				entry.mu.Lock()
+				entry.kvmActive = false
+				entry.mu.Unlock()
+				break
+			}
+		}
+	}
+	log.Printf("Session %s: iKVM bridge stopped", sessionID)
+}
+
+// ikvmBridgeRunning returns whether a bridge is running for the given session.
+func (s *Server) ikvmBridgeRunning(sessionID string) bool {
+	s.bridgesMu.Lock()
+	bridge := s.Bridges[sessionID]
+	s.bridgesMu.Unlock()
+	return bridge != nil && bridge.Running()
 }
 
 // bidirectionalWSProxy copies messages bidirectionally between two WebSocket connections.

@@ -475,6 +475,9 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Stop any running iKVM bridge for this session
+	s.StopIKVMBridge(id)
+
 	session.Status = models.SessionDisconnected
 	s.Sessions.Set(session)
 
