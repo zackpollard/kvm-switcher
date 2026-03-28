@@ -920,7 +920,7 @@ func (d *Decoder) inverseDCT(offset int, qtIdx byte) {
 // isNeutralBlock checks if the current yuvTile contains only the JPEG neutral
 // midpoint value (128) for all Y, Cb, and Cr samples. This indicates the ASPEED
 // encoder had no real data for this block (DC=0, no AC coefficients).
-func (d *Decoder) isNeutralBlock() bool {
+func (d *Decoder) isNeutralBlock() bool { return false
 	// Check Y (0..63), Cb (64..127), Cr (128..191) in 4:4:4 mode.
 	// In 4:2:0 mode, check all 384 values (4Y + Cb + Cr).
 	count := 192
@@ -1239,7 +1239,9 @@ func (d *Decoder) decompressJPEGPass2(tileX, tileY int, qtOffset byte) {
 	d.decodeHuffmanDataUnit(crDCnr, crACnr, &d.dcCr, 128)
 	d.inverseDCT(128, qtOffset+1)
 	if d.isNeutralBlock() {
-		d.updatePreviousYUV(tileX, tileY)
+		// For Pass2, neutral (all 128) means "no change from previous frame."
+		// The differential formula: yVal = previousYUV + (128-128) = previousYUV.
+		// So we leave previousYUV untouched and skip the framebuffer write.
 		return
 	}
 	d.convertYUVtoRGBPass2(tileX, tileY)
