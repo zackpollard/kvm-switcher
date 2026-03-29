@@ -125,7 +125,11 @@ func fetchDeviceStatus(cfg *models.ServerConfig) *DeviceStatus {
 
 	// No handler or handler returned nil (needs creds) — just check reachability
 	online := checkDeviceOnline(cfg)
-	return &DeviceStatus{Online: online}
+	status := &DeviceStatus{Online: online}
+	if !online {
+		status.Error = "BMC unreachable"
+	}
+	return status
 }
 
 // PollStatuses fetches status for all configured servers in parallel and updates the cache.
@@ -144,6 +148,8 @@ func PollStatuses(servers []models.ServerConfig, cache *StatusCache) {
 				status := &DeviceStatus{
 					Online:              false,
 					CircuitBreakerState: string(breaker.State()),
+					LastUpdated:         time.Now(),
+					Error:               "circuit breaker open: server unreachable",
 				}
 				cache.Set(cfg.Name, status)
 				middleware.BMCOnline.WithLabelValues(cfg.Name).Set(0)
@@ -161,8 +167,9 @@ func PollStatuses(servers []models.ServerConfig, cache *StatusCache) {
 			select {
 			case status = <-done:
 			case <-time.After(30 * time.Second):
-				status = &DeviceStatus{Online: false}
+				status = &DeviceStatus{Online: false, Error: "status poll timed out"}
 			}
+			status.LastUpdated = time.Now()
 
 			// Update circuit breaker
 			prevState := breaker.State()

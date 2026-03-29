@@ -164,6 +164,8 @@ export interface DeviceStatus {
 	image_version?: string;
 	update_available?: boolean;
 	circuit_breaker_state?: string;
+	last_updated?: string;
+	error?: string;
 }
 
 export async function fetchServerStatuses(): Promise<Record<string, DeviceStatus>> {

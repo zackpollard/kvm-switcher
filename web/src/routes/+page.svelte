@@ -41,6 +41,15 @@
 		return labels[bt] || bt;
 	}
 
+	function relativeTime(iso?: string): { text: string; stale: boolean } {
+		if (!iso) return { text: '', stale: false };
+		const diffSec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+		if (diffSec < 0) return { text: 'just now', stale: false };
+		if (diffSec < 60) return { text: `${diffSec}s ago`, stale: false };
+		const min = Math.floor(diffSec / 60);
+		return { text: `${min}m ago`, stale: diffSec > 60 };
+	}
+
 	function healthColor(h?: string): string {
 		if (h === 'ok' || h === 'OK') return 'text-success';
 		if (h === 'warning' || h === 'Warning') return 'text-warning';
@@ -187,9 +196,12 @@
 								</div>
 							{/snippet}
 
-							{#if st?.model || st?.power_state || st?.health || st?.temperature_c || st?.app_version || st?.image_version || st?.load_watts || st?.load_pct || st?.load_amps || st?.voltage || (st?.battery_pct != null && st.battery_pct > 0)}
+							{#if st?.error || st?.last_updated || st?.model || st?.power_state || st?.health || st?.temperature_c || st?.app_version || st?.image_version || st?.load_watts || st?.load_pct || st?.load_amps || st?.voltage || (st?.battery_pct != null && st.battery_pct > 0)}
 								<div class="-mx-5 -mt-3 border-t border-light-200 px-5 py-3">
 									<div class="space-y-1 text-sm">
+										{#if st?.error}
+											<p class="text-xs text-danger">{st.error}</p>
+										{/if}
 										{#if st?.model}
 											<p class="text-dark">{st.model}</p>
 										{/if}
@@ -263,6 +275,10 @@
 											{/if}
 										{/if}
 									</div>
+									{#if st?.last_updated}
+										{@const rt = relativeTime(st.last_updated)}
+										<p class="mt-1 text-xs {rt.stale ? 'text-warning' : 'text-muted'}">Updated {rt.text}</p>
+									{/if}
 								</div>
 							{/if}
 

@@ -368,5 +368,7 @@ type DeviceStatus struct {
 	AppVersion          string  `json:"app_version,omitempty"`            // NanoKVM: application version
 	ImageVersion        string  `json:"image_version,omitempty"`          // NanoKVM: firmware image version
 	UpdateAvail         bool    `json:"update_available,omitempty"`       // NanoKVM: firmware update available
-	CircuitBreakerState string  `json:"circuit_breaker_state,omitempty"` // "closed", "open", "half-open"
+	CircuitBreakerState string    `json:"circuit_breaker_state,omitempty"` // "closed", "open", "half-open"
+	LastUpdated         time.Time `json:"last_updated"`
+	Error               string    `json:"error,omitempty"`
 }
