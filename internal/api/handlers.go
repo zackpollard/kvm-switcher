@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -256,11 +257,29 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 		entry := getOrCreateProxy(serverCfg, serverCfg.Name)
 		existingCreds := entry.getBMCCredentials()
 		if existingCreds == nil || existingCreds.SessionCookie == "" {
-			// No existing session — create one
+			// No existing session — create one with retry for transient errors
 			log.Printf("Session %s: creating BMC session for %s...", session.ID, serverCfg.Name)
-			var err error
-			existingCreds, err = authenticator.CreateWebSession(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
-			if err != nil {
+			var createErr error
+			for attempt := 1; attempt <= bmcRetryAttempts; attempt++ {
+				existingCreds, createErr = authenticator.CreateWebSession(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
+				if createErr == nil {
+					break
+				}
+				if !isTransientError(createErr) {
+					break
+				}
+				if attempt < bmcRetryAttempts {
+					log.Printf("Session %s: BMC auth attempt %d/%d failed (transient): %v — retrying in %v",
+						session.ID, attempt, bmcRetryAttempts, createErr, bmcRetryDelay)
+					select {
+					case <-time.After(bmcRetryDelay):
+					case <-ctx.Done():
+						createErr = fmt.Errorf("cancelled during retry: %w", ctx.Err())
+					}
+				}
+			}
+			if createErr != nil {
+				log.Printf("Session %s: BMC authentication failed after %d attempts: %v", session.ID, bmcRetryAttempts, createErr)
 				session.Status = models.SessionError
 				session.Error = "BMC authentication failed"
 				s.Sessions.Set(session)
@@ -286,9 +305,28 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	}
 
 	log.Printf("Session %s: authenticating with BMC %s...", session.ID, serverCfg.BMCIP)
-	creds, connectInfo, err := authenticator.Authenticate(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
+	var creds *models.BMCCredentials
+	var connectInfo *models.KVMConnectInfo
+	for attempt := 1; attempt <= bmcRetryAttempts; attempt++ {
+		creds, connectInfo, err = authenticator.Authenticate(ctx, serverCfg.BMCIP, serverCfg.BMCPort, serverCfg.Username, password)
+		if err == nil {
+			break
+		}
+		if !isTransientError(err) {
+			break
+		}
+		if attempt < bmcRetryAttempts {
+			log.Printf("Session %s: BMC auth attempt %d/%d failed (transient): %v — retrying in %v",
+				session.ID, attempt, bmcRetryAttempts, err, bmcRetryDelay)
+			select {
+			case <-time.After(bmcRetryDelay):
+			case <-ctx.Done():
+				err = fmt.Errorf("cancelled during retry: %w", ctx.Err())
+			}
+		}
+	}
 	if err != nil {
-		log.Printf("Session %s: BMC authentication failed: %v", session.ID, err)
+		log.Printf("Session %s: BMC authentication failed after %d attempts: %v", session.ID, bmcRetryAttempts, err)
 		session.Status = models.SessionError
 		session.Error = "BMC authentication failed"
 		s.Sessions.Set(session)
@@ -557,6 +595,37 @@ func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// isTransientError returns true if the error looks like a temporary BMC issue
+// that is worth retrying (connection refused, timeout, 5xx status).
+// Authentication failures (401, 403) are NOT transient.
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	transientIndicators := []string{
+		"connection refused",
+		"timeout",
+		"deadline exceeded",
+		"503",
+		"502",
+		"504",
+		"connection reset",
+		"no such host",
+		"temporary failure",
+		"i/o timeout",
+	}
+	for _, indicator := range transientIndicators {
+		if strings.Contains(msg, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
+const bmcRetryAttempts = 3
+const bmcRetryDelay = 2 * time.Second
+
 // ensureBMCSession creates or renews a BMC web session for the given server.
 // Returns the credentials, or an error if authentication fails.
 func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) {
@@ -570,7 +639,7 @@ func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) 
 		return nil, fmt.Errorf("unsupported board type: %s", cfg.BoardType)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	entry := getOrCreateProxy(cfg, cfg.Name)
@@ -589,9 +658,27 @@ func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) 
 		entry.setBMCCredentials(nil)
 	}
 
-	creds, err := authenticator.CreateWebSession(ctx, cfg.BMCIP, cfg.BMCPort, cfg.Username, password)
+	var creds *models.BMCCredentials
+	for attempt := 1; attempt <= bmcRetryAttempts; attempt++ {
+		creds, err = authenticator.CreateWebSession(ctx, cfg.BMCIP, cfg.BMCPort, cfg.Username, password)
+		if err == nil {
+			break
+		}
+		if !isTransientError(err) {
+			return nil, fmt.Errorf("BMC auth failed (non-retryable): %w", err)
+		}
+		if attempt < bmcRetryAttempts {
+			log.Printf("BMC session for %s: attempt %d/%d failed (transient): %v — retrying in %v",
+				cfg.Name, attempt, bmcRetryAttempts, err, bmcRetryDelay)
+			select {
+			case <-time.After(bmcRetryDelay):
+			case <-ctx.Done():
+				return nil, fmt.Errorf("BMC auth cancelled during retry: %w", ctx.Err())
+			}
+		}
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("BMC auth failed after %d attempts: %w", bmcRetryAttempts, err)
 	}
 
 	entry.setBMCCredentials(creds)
