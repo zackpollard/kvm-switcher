@@ -3,7 +3,6 @@ package boards
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -186,118 +185,9 @@ func (b *IDRAC8Board) FetchStatus(cfg *models.ServerConfig, creds *models.BMCCre
 	return status
 }
 
-// --- VirtualMediaHandler implementation ---
-
-func (b *IDRAC8Board) MountMedia(cfg *models.ServerConfig, creds *models.BMCCredentials, imageURL string) error {
-	baseURL := BMCBaseURL("dell_idrac8", cfg.BMCIP, cfg.BMCPort)
-	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia"
-
-	password := ""
-	if cfg.CredentialEnv != "" {
-		password = os.Getenv(cfg.CredentialEnv)
-	}
-
-	body := fmt.Sprintf(`{"Image":"%s"}`, imageURL)
-	req, err := http.NewRequest("POST", url, strings.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("mount request creation failed: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(cfg.Username, password)
-
-	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("mount request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("mount failed (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-	return nil
-}
-
-func (b *IDRAC8Board) EjectMedia(cfg *models.ServerConfig, creds *models.BMCCredentials) error {
-	baseURL := BMCBaseURL("dell_idrac8", cfg.BMCIP, cfg.BMCPort)
-	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.EjectMedia"
-
-	password := ""
-	if cfg.CredentialEnv != "" {
-		password = os.Getenv(cfg.CredentialEnv)
-	}
-
-	req, err := http.NewRequest("POST", url, strings.NewReader(`{}`))
-	if err != nil {
-		return fmt.Errorf("eject request creation failed: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(cfg.Username, password)
-
-	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("eject request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("eject failed (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-	return nil
-}
-
-func (b *IDRAC8Board) GetMediaStatus(cfg *models.ServerConfig, creds *models.BMCCredentials) (*models.VirtualMediaStatus, error) {
-	baseURL := BMCBaseURL("dell_idrac8", cfg.BMCIP, cfg.BMCPort)
-	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD"
-
-	password := ""
-	if cfg.CredentialEnv != "" {
-		password = os.Getenv(cfg.CredentialEnv)
-	}
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("status request creation failed: %w", err)
-	}
-	req.SetBasicAuth(cfg.Username, password)
-
-	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("status request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("status query failed (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var redfishResp struct {
-		Inserted       bool     `json:"Inserted"`
-		Image          string   `json:"Image"`
-		MediaTypes     []string `json:"MediaTypes"`
-		WriteProtected bool     `json:"WriteProtected"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&redfishResp); err != nil {
-		return nil, fmt.Errorf("failed to parse virtual media response: %w", err)
-	}
-
-	mediaType := ""
-	if len(redfishResp.MediaTypes) > 0 {
-		mediaType = redfishResp.MediaTypes[0]
-	}
-
-	return &models.VirtualMediaStatus{
-		Inserted:       redfishResp.Inserted,
-		Image:          redfishResp.Image,
-		MediaType:      mediaType,
-		WriteProtected: redfishResp.WriteProtected,
-	}, nil
-}
+// Note: iDRAC8 Redfish VirtualMedia InsertMedia action exists in the schema
+// but returns HTTP 500 on firmware 2.x. Virtual media on iDRAC8 requires the
+// proprietary web UI API which needs session cookies. Not implemented yet.
 
 // InferContentType returns a MIME type based on the URL path extension.
 // Used when the BMC sends a generic Content-Type like application/x-gzip.
