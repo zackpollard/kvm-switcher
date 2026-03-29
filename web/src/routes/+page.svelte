@@ -96,10 +96,15 @@
 		}
 	}
 
-	async function connect(serverName: string) {
+	async function connect(serverName: string, existingSessionId?: string) {
 		try {
 			connecting = serverName;
 			error = '';
+			if (existingSessionId) {
+				// Reuse existing session — skip BMC auth, connect instantly
+				goto(`/kvm/${existingSessionId}`);
+				return;
+			}
 			const session = await createSession(serverName);
 			goto(`/kvm/${session.id}`);
 		} catch (e) {
@@ -276,7 +281,7 @@
 									</button>
 									{#if server.board_type !== 'apc_ups' && server.board_type !== 'nanokvm'}
 										<button
-											onclick={() => connect(server.name)}
+											onclick={() => connect(server.name, server.active_session_id)}
 											disabled={connecting === server.name}
 											class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
 										>

@@ -77,7 +77,8 @@ type ServerInfo struct {
 	BMCIP     string `json:"bmc_ip"`
 	BMCPort   int    `json:"bmc_port"`
 	BoardType string `json:"board_type"`
-	HasActive bool   `json:"has_active_session"`
+	HasActive       bool   `json:"has_active_session"`
+	ActiveSessionID string `json:"active_session_id,omitempty"`
 }
 
 // ListServers handles GET /api/servers.
@@ -90,14 +91,18 @@ func (s *Server) ListServers(w http.ResponseWriter, r *http.Request) {
 		if oidcEnabled && !kvmoidc.UserCanAccessServer(&s.Config.OIDC, user, srv.Name) {
 			continue
 		}
-		_, hasSession := s.Sessions.FindByServer(srv.Name)
-		servers = append(servers, ServerInfo{
+		existingSession, hasSession := s.Sessions.FindByServer(srv.Name)
+		info := ServerInfo{
 			Name:      srv.Name,
 			BMCIP:     srv.BMCIP,
 			BMCPort:   srv.BMCPort,
 			BoardType: srv.BoardType,
 			HasActive: hasSession,
-		})
+		}
+		if hasSession {
+			info.ActiveSessionID = existingSession.ID
+		}
+		servers = append(servers, info)
 	}
 	if servers == nil {
 		servers = []ServerInfo{}

@@ -4,6 +4,7 @@ export interface ServerInfo {
 	bmc_port: number;
 	board_type: string;
 	has_active_session: boolean;
+	active_session_id?: string;
 }
 
 export interface KVMSession {

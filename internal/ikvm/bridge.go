@@ -275,8 +275,28 @@ func (b *Bridge) ServeWebSocket(ws *websocket.Conn) error {
 		return fmt.Errorf("VNC handshake: %w", err)
 	}
 
+	// Send the current framebuffer immediately so reconnecting clients don't
+	// have to wait for the next BMC frame (which could be 5+ seconds away).
+	b.fbMu.Lock()
+	if b.decoder.Width > 0 && b.decoder.Height > 0 && len(b.decoder.Framebuffer) >= int(b.decoder.Width)*int(b.decoder.Height)*4 {
+		w, h := b.decoder.Width, b.decoder.Height
+		size := int(w) * int(h) * 4
+		fb := b.decoder.Framebuffer
+		pixelData := make([]byte, size)
+		for i := 0; i < size; i += 4 {
+			pixelData[i] = fb[i+2]
+			pixelData[i+1] = fb[i+1]
+			pixelData[i+2] = fb[i]
+			pixelData[i+3] = fb[i+3]
+		}
+		b.fbMu.Unlock()
+		msg := buildFramebufferUpdate(0, 0, w, h, pixelData)
+		ws.WriteMessage(websocket.BinaryMessage, msg)
+	} else {
+		b.fbMu.Unlock()
+	}
+
 	// Run input reader and frame sender in parallel, scoped to this WS client.
-	// Use the bridge's context so that if the bridge stops, these goroutines stop too.
 	errCh := make(chan error, 2)
 
 	// VNC client -> BMC (keyboard/mouse input reader)

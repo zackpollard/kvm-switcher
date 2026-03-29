@@ -5,6 +5,10 @@
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 
+	const pageT0 = performance.now();
+	const pageLog = (msg: string) => console.log(`[KVM-Page +${(performance.now() - pageT0).toFixed(0)}ms] ${msg}`);
+	pageLog('page script init');
+
 	let session: KVMSession | null = $state(null);
 	let activeSessionId = $state(page.params.id);
 	let error = $state('');
@@ -19,7 +23,9 @@
 
 	async function loadSession() {
 		try {
+			pageLog(`loadSession(${activeSessionId}) calling API...`);
 			session = await getSession(activeSessionId);
+			pageLog(`loadSession result: status=${session.status}`);
 			if (session.status === 'error') {
 				error = session.error || 'Session encountered an error';
 				reconnecting = false;
@@ -308,7 +314,6 @@
 				<div class="text-center">
 					<div class="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400"></div>
 					<p class="mt-4 text-gray-400">Starting KVM session...</p>
-					<p class="mt-1 text-sm text-gray-500">Authenticating with BMC and launching viewer</p>
 				</div>
 			</div>
 		{:else if session?.status === 'connected'}
