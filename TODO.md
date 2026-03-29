@@ -77,5 +77,4 @@
 ### Docker / Deployment
 - [x] Multi-arch Docker image (ARM + amd64 via publish.yml with native runners)
 - [x] Clean up legacy JViewer Docker build targets from Makefile
-- [ ] Document production deployment (reverse proxy, TLS termination, env vars)
-- [ ] Helm chart or docker-compose production template
+- [x] Document production deployment (docs/deployment.md: config, Docker, nginx, OIDC, security)
