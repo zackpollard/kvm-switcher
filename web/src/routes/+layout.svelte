@@ -58,7 +58,7 @@
 							size="small"
 							variant="ghost"
 							color="secondary"
-							shape="semi-round"
+							class="!rounded-xl"
 						>
 							Logout
 						</Button>

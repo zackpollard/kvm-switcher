@@ -166,7 +166,7 @@
 	<!-- Toolbar -->
 	<div class="flex items-center justify-between border-b border-light-200 bg-light-50 px-4 py-2" role="toolbar" aria-label="KVM controls">
 		<div class="flex items-center gap-3">
-			<Button shape="semi-round" href="/" size="tiny" variant="ghost" color="secondary">&larr; Back</Button>
+			<Button class="!rounded-xl" href="/" size="tiny" variant="ghost" color="secondary">&larr; Back</Button>
 			{#if session}
 				<span class="text-sm font-medium text-dark">{session.server_name}</span>
 				<span class="font-mono text-xs text-muted">{session.bmc_ip}</span>
@@ -195,12 +195,12 @@
 		</div>
 
 		<div class="flex items-center gap-1">
-			<Button shape="semi-round" onclick={sendCtrlAltDel} size="tiny" variant="ghost" color="secondary">
+			<Button class="!rounded-xl" onclick={sendCtrlAltDel} size="tiny" variant="ghost" color="secondary">
 				Ctrl+Alt+Del
 			</Button>
 			{#if isIKVM}
 				<div class="relative">
-					<Button shape="semi-round"
+					<Button class="!rounded-xl"
 						onclick={() => { showPowerMenu = !showPowerMenu; showMouseMenu = false; showKbdMenu = false; }}
 						size="tiny"
 						variant="ghost"
@@ -222,7 +222,7 @@
 						</div>
 					{/if}
 				</div>
-				<Button shape="semi-round"
+				<Button class="!rounded-xl"
 					onclick={toggleDisplayLock}
 					size="tiny"
 					variant="ghost"
@@ -231,7 +231,7 @@
 				>
 					Lock Display
 				</Button>
-				<Button shape="semi-round"
+				<Button class="!rounded-xl"
 					onclick={resetVideo}
 					size="tiny"
 					variant="ghost"
@@ -241,7 +241,7 @@
 					Reset Video
 				</Button>
 				<div class="relative">
-					<Button shape="semi-round"
+					<Button class="!rounded-xl"
 						onclick={() => { showMouseMenu = !showMouseMenu; showKbdMenu = false; showPowerMenu = false; }}
 						size="tiny"
 						variant="ghost"
@@ -259,7 +259,7 @@
 					{/if}
 				</div>
 				<div class="relative">
-					<Button shape="semi-round"
+					<Button class="!rounded-xl"
 						onclick={() => { showKbdMenu = !showKbdMenu; showMouseMenu = false; showPowerMenu = false; }}
 						size="tiny"
 						variant="ghost"
@@ -280,10 +280,10 @@
 					{/if}
 				</div>
 			{/if}
-			<Button shape="semi-round" onclick={toggleFullscreen} size="tiny" variant="ghost" color="secondary">
+			<Button class="!rounded-xl" onclick={toggleFullscreen} size="tiny" variant="ghost" color="secondary">
 				{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
 			</Button>
-			<Button shape="semi-round" onclick={disconnect} size="tiny" variant="outline" color="danger">
+			<Button class="!rounded-xl" onclick={disconnect} size="tiny" variant="outline" color="danger">
 				Disconnect
 			</Button>
 		</div>
@@ -303,7 +303,7 @@
 			<div class="flex h-full items-center justify-center" role="alert">
 				<div class="text-center">
 					<Alert color="danger" title={error} />
-					<Button shape="semi-round"
+					<Button class="!rounded-xl"
 						onclick={() => goto('/')}
 						size="small"
 						variant="outline"
@@ -318,7 +318,7 @@
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
 					<p class="text-muted">Connection lost</p>
-					<Button shape="semi-round" onclick={reconnect} size="small" variant="filled" color="primary" class="mt-4">
+					<Button class="!rounded-xl" onclick={reconnect} size="small" variant="filled" color="primary" class="mt-4">
 						Reconnect
 					</Button>
 				</div>
@@ -336,7 +336,7 @@
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
 					<p class="text-muted">Session disconnected</p>
-					<Button shape="semi-round"
+					<Button class="!rounded-xl"
 						onclick={() => goto('/')}
 						size="small"
 						variant="outline"

@@ -78,7 +78,7 @@
 			size="tiny"
 			variant="outline"
 			color={level === 'critical' ? 'danger' : 'warning'}
-			shape="semi-round"
+			class="!rounded-xl"
 		>
 			{keepingAlive ? 'Extending...' : 'Stay connected'}
 		</Button>
