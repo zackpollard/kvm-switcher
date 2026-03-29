@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -149,6 +150,13 @@ func (b *IDRAC9Board) FetchStatus(cfg *models.ServerConfig, creds *models.BMCCre
 
 // --- VirtualMediaHandler implementation ---
 
+func (b *IDRAC9Board) redfishPassword(cfg *models.ServerConfig) string {
+	if cfg.CredentialEnv != "" {
+		return os.Getenv(cfg.CredentialEnv)
+	}
+	return ""
+}
+
 func (b *IDRAC9Board) MountMedia(cfg *models.ServerConfig, creds *models.BMCCredentials, imageURL string) error {
 	baseURL := BMCBaseURL("dell_idrac9", cfg.BMCIP, cfg.BMCPort)
 	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia"
@@ -159,7 +167,7 @@ func (b *IDRAC9Board) MountMedia(cfg *models.ServerConfig, creds *models.BMCCred
 		return fmt.Errorf("mount request creation failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", creds.CSRFToken)
+	req.SetBasicAuth(cfg.Username, b.redfishPassword(cfg))
 
 	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
 	resp, err := client.Do(req)
@@ -184,7 +192,7 @@ func (b *IDRAC9Board) EjectMedia(cfg *models.ServerConfig, creds *models.BMCCred
 		return fmt.Errorf("eject request creation failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Auth-Token", creds.CSRFToken)
+	req.SetBasicAuth(cfg.Username, b.redfishPassword(cfg))
 
 	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
 	resp, err := client.Do(req)
@@ -208,7 +216,7 @@ func (b *IDRAC9Board) GetMediaStatus(cfg *models.ServerConfig, creds *models.BMC
 	if err != nil {
 		return nil, fmt.Errorf("status request creation failed: %w", err)
 	}
-	req.Header.Set("X-Auth-Token", creds.CSRFToken)
+	req.SetBasicAuth(cfg.Username, b.redfishPassword(cfg))
 
 	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
 	resp, err := client.Do(req)
