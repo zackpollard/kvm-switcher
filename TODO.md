@@ -24,11 +24,11 @@
 ### Service Worker
 - [ ] Refactor 3-layer fallback routing (clientId -> Referer -> lastActiveServer) into a cleaner state machine
 - [x] Fix intermittent "404 no servers found" — clear lastActiveServer on app-route navigation, add / and /kvm/ to isAppRoute
-- [ ] Add diagnostic logging for client mapping failures (behind a debug flag)
+- [x] Add diagnostic logging for client mapping failures (DEBUG flag, 8 console.debug calls)
 
 ### Status Polling
 - [ ] Add staleness indicators in the UI (e.g. "last updated 2m ago")
-- [ ] Log circuit breaker recovery events (currently only failures are logged)
+- [x] Log circuit breaker recovery events (open/half-open -> closed transitions)
 - [ ] Per-server configurable polling intervals
 - [ ] Expose status fetch errors to the frontend instead of silently failing
 
@@ -61,7 +61,7 @@
 
 ### Production Hardening
 - [x] Configure restrictive CORS origins — WebSocket upgraders now check configured origins
-- [ ] Remove InsecureSkipVerify from iDRAC9 WebSocket proxy (add proper CA trust)
+- [x] Make InsecureSkipVerify configurable per-server (tls_skip_verify field, default true)
 - [x] Add session cookie rotation on privilege changes
 - [x] Document and enforce audit log retention/cleanup policy — 90-day default, hourly purge
 - [x] Rate limit BMC proxy requests — 300 RPM default, mutation endpoints also protected
