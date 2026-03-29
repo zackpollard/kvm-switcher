@@ -58,6 +58,8 @@
 
 {#if level !== 'ok'}
 	<div
+		role="alert"
+		aria-live="assertive"
 		class="flex items-center gap-3 px-4 py-2 text-sm {level === 'critical'
 			? 'bg-red-900/80 text-red-200'
 			: 'bg-yellow-900/80 text-yellow-200'}"

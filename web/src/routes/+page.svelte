@@ -140,14 +140,14 @@
 	</div>
 
 	{#if error}
-		<div class="mb-6 rounded-md border border-red-800 bg-red-900/50 px-4 py-3 text-sm text-red-200">
+		<div role="alert" class="mb-6 rounded-md border border-red-800 bg-red-900/50 px-4 py-3 text-sm text-red-200">
 			{error}
 		</div>
 	{/if}
 
 	{#if loading && servers.length === 0}
-		<div class="flex items-center justify-center py-20">
-			<div class="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400"></div>
+		<div class="flex items-center justify-center py-20" aria-live="polite">
+			<div class="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400" role="status" aria-label="Loading"></div>
 			<span class="ml-3 text-gray-400">Loading...</span>
 		</div>
 	{:else if servers.length === 0}
@@ -167,9 +167,9 @@
 							<div class="mb-3 flex items-start justify-between">
 								<div class="flex items-center gap-2">
 									{#if st}
-										<span class="h-2.5 w-2.5 rounded-full {st.online ? 'bg-green-400' : 'bg-red-500'}" title="{st.online ? 'Online' : 'Offline'}"></span>
+										<span class="h-2.5 w-2.5 rounded-full {st.online ? 'bg-green-400' : 'bg-red-500'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
 									{:else}
-										<span class="h-2.5 w-2.5 rounded-full bg-gray-600" title="Unknown"></span>
+										<span class="h-2.5 w-2.5 rounded-full bg-gray-600" title="Unknown" aria-label="Status unknown" role="img"></span>
 									{/if}
 									<h3 class="text-lg font-semibold text-white">{server.name} <span class="text-sm font-normal text-gray-500">({server.bmc_ip})</span></h3>
 								</div>
