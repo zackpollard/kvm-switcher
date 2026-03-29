@@ -10,6 +10,7 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/circuitbreaker"
 	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 )
 
 // circuitBreakers stores per-server circuit breakers for the status poller.
@@ -84,10 +85,10 @@ func bmcBaseURL(boardType, bmcIP string, bmcPort int) string {
 }
 
 // checkDeviceOnline performs a simple HTTP HEAD request to see if a BMC is reachable.
-func checkDeviceOnline(bmcIP string, bmcPort int, boardType string) bool {
-	url := bmcBaseURL(boardType, bmcIP, bmcPort) + "/"
+func checkDeviceOnline(cfg *models.ServerConfig) bool {
+	url := bmcBaseURL(cfg.BoardType, cfg.BMCIP, cfg.BMCPort) + "/"
 
-	client := boards.NewStatusHTTPClient(3*time.Second, true)
+	client := boards.NewStatusHTTPClient(3*time.Second, tlsutil.SkipVerify(cfg))
 	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return false
@@ -123,7 +124,7 @@ func fetchDeviceStatus(cfg *models.ServerConfig) *DeviceStatus {
 	}
 
 	// No handler or handler returned nil (needs creds) — just check reachability
-	online := checkDeviceOnline(cfg.BMCIP, cfg.BMCPort, cfg.BoardType)
+	online := checkDeviceOnline(cfg)
 	return &DeviceStatus{Online: online}
 }
 

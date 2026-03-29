@@ -7,12 +7,13 @@ import (
 
 // ServerConfig represents a BMC/IPMI server entry from the config file.
 type ServerConfig struct {
-	Name          string `yaml:"name"`
-	BMCIP         string `yaml:"bmc_ip"`
-	BMCPort       int    `yaml:"bmc_port"`
-	BoardType     string `yaml:"board_type"`
-	Username      string `yaml:"username"`
-	CredentialEnv string `yaml:"credential_env"`
+	Name           string `yaml:"name"`
+	BMCIP          string `yaml:"bmc_ip"`
+	BMCPort        int    `yaml:"bmc_port"`
+	BoardType      string `yaml:"board_type"`
+	Username       string `yaml:"username"`
+	CredentialEnv  string `yaml:"credential_env"`
+	TLSSkipVerify  *bool  `yaml:"tls_skip_verify"` // nil = default true (BMCs use self-signed certs)
 }
 
 // Settings holds global application settings.

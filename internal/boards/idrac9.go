@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 )
 
 func init() {
@@ -68,7 +69,7 @@ func (b *IDRAC9Board) FetchStatus(cfg *models.ServerConfig, creds *models.BMCCre
 		return nil // requires web session credentials
 	}
 	status := &models.DeviceStatus{Online: true}
-	client := NewStatusHTTPClient(5*time.Second, true)
+	client := NewStatusHTTPClient(5*time.Second, tlsutil.SkipVerify(cfg))
 
 	baseURL := BMCBaseURL("dell_idrac9", cfg.BMCIP, cfg.BMCPort)
 

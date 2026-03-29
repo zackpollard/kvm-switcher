@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 )
 
 func init() {
@@ -102,7 +103,7 @@ func (b *IDRAC8Board) CookiesToStrip() []string {
 
 func (b *IDRAC8Board) FetchStatus(cfg *models.ServerConfig, creds *models.BMCCredentials) *models.DeviceStatus {
 	status := &models.DeviceStatus{Online: true}
-	client := NewStatusHTTPClient(20*time.Second, true) // iDRAC8 is slow
+	client := NewStatusHTTPClient(20*time.Second, tlsutil.SkipVerify(cfg)) // iDRAC8 is slow
 
 	baseURL := BMCBaseURL("dell_idrac8", cfg.BMCIP, cfg.BMCPort)
 

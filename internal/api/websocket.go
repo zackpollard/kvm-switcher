@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -14,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 	vncbridge "github.com/zackpollard/kvm-switcher/internal/vnc"
 )
 
@@ -93,9 +93,18 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 		}
 	}
 
+	// Look up server config for TLS settings.
+	skipVerify := true // default for backward compat
+	for i := range s.Config.Servers {
+		if s.Config.Servers[i].Name == session.ServerName {
+			skipVerify = tlsutil.SkipVerify(&s.Config.Servers[i])
+			break
+		}
+	}
+
 	dialer := websocket.Dialer{
-		Subprotocols:  []string{"binary"},
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Subprotocols:    []string{"binary"},
+		TLSClientConfig: tlsutil.ConfigForServer(skipVerify),
 	}
 
 	backendConn, _, err := dialer.Dial(session.KVMTarget, headers)

@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/zackpollard/kvm-switcher/internal/boards"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 )
 
 // bmcProxyEntry holds a reverse proxy and its cookie jar for a single BMC.
@@ -215,7 +215,7 @@ func getOrCreateProxy(serverCfg *models.ServerConfig, name string) *bmcProxyEntr
 			return nil
 		},
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: tlsutil.ConfigForServer(tlsutil.SkipVerify(serverCfg)),
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("BMC proxy error for %s: %v", name, err)

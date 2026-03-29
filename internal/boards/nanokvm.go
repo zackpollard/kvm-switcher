@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 )
 
 func init() {
@@ -120,7 +121,7 @@ func (b *NanoKVMBoard) FetchStatus(cfg *models.ServerConfig, creds *models.BMCCr
 		return nil // requires web session credentials
 	}
 	status := &models.DeviceStatus{Online: true, Model: "NanoKVM"}
-	client := NewStatusHTTPClient(5*time.Second, false)
+	client := NewStatusHTTPClient(5*time.Second, tlsutil.SkipVerify(cfg))
 
 	baseURL := BMCBaseURL("nanokvm", cfg.BMCIP, cfg.BMCPort)
 
