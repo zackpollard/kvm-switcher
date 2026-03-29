@@ -3,10 +3,10 @@
 ## Features
 
 ### Virtual Media
-- [ ] ISO mounting for iDRAC8/iDRAC9 via Redfish virtual media API
-- [ ] Virtual media for MegaRAC (IVTP media commands exist but are unused)
-- [ ] Frontend UI for uploading/selecting ISO images
-- [ ] Progress indication for media mount operations
+- [x] ISO mounting for iDRAC8/iDRAC9 via Redfish virtual media API
+- [ ] Virtual media for MegaRAC (web API — needs live BMC research)
+- [x] Frontend UI for mounting ISOs via URL
+- [ ] Upload-based mounting (serve ISOs from the Go server)
 
 ### Serial over LAN (SOL)
 - [ ] Text-based console access alongside KVM
