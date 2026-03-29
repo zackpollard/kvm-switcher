@@ -98,6 +98,7 @@ func main() {
 
 	// Rate limiter for mutation endpoints
 	rateLimited := middleware.RateLimitMiddleware(cfg.Settings.RateLimitRPM)
+	bmcRateLimited := middleware.RateLimitMiddleware(cfg.Settings.BMCProxyRateLimitRPM)
 
 	// Auth routes (always registered, but login redirects only work when OIDC is enabled)
 	if oidcProvider != nil {
@@ -122,21 +123,21 @@ func main() {
 		mux.HandleFunc("GET /api/sessions", srv.ListSessions)
 		mux.HandleFunc("GET /api/sessions/{id}", srv.GetSession)
 		mux.HandleFunc("PATCH /api/sessions/{id}/keepalive", srv.KeepAliveSession)
-		mux.HandleFunc("DELETE /api/sessions/{id}", srv.DeleteSession)
+		mux.Handle("DELETE /api/sessions/{id}", rateLimited(http.HandlerFunc(srv.DeleteSession)))
 		mux.Handle("POST /api/ipmi-session/{name}", rateLimited(http.HandlerFunc(srv.CreateIPMISession)))
 		mux.HandleFunc("GET /api/server-status", srv.GetServerStatuses)
 		mux.HandleFunc("GET /api/audit-log", srv.GetAuditLog)
-		mux.HandleFunc("POST /api/sessions/{id}/power", srv.KVMPowerControl)
-		mux.HandleFunc("POST /api/sessions/{id}/display-lock", srv.KVMDisplayLock)
-		mux.HandleFunc("POST /api/sessions/{id}/reset-video", srv.KVMResetVideo)
-		mux.HandleFunc("POST /api/sessions/{id}/mouse-mode", srv.KVMMouseMode)
-		mux.HandleFunc("POST /api/sessions/{id}/keyboard-layout", srv.KVMKeyboardLayout)
-		mux.HandleFunc("POST /api/sessions/{id}/ipmi", srv.KVMIPMICommand)
+		mux.Handle("POST /api/sessions/{id}/power", rateLimited(http.HandlerFunc(srv.KVMPowerControl)))
+		mux.Handle("POST /api/sessions/{id}/display-lock", rateLimited(http.HandlerFunc(srv.KVMDisplayLock)))
+		mux.Handle("POST /api/sessions/{id}/reset-video", rateLimited(http.HandlerFunc(srv.KVMResetVideo)))
+		mux.Handle("POST /api/sessions/{id}/mouse-mode", rateLimited(http.HandlerFunc(srv.KVMMouseMode)))
+		mux.Handle("POST /api/sessions/{id}/keyboard-layout", rateLimited(http.HandlerFunc(srv.KVMKeyboardLayout)))
+		mux.Handle("POST /api/sessions/{id}/ipmi", rateLimited(http.HandlerFunc(srv.KVMIPMICommand)))
 		mux.HandleFunc("GET /api/sessions/{id}/screenshot", srv.KVMScreenshot)
 		mux.HandleFunc("/api/ws", srv.HandleNanoKVMWebSocket)
 		mux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
-		mux.HandleFunc("/__bmc/", srv.HandleBMCProxy)
+		mux.Handle("/__bmc/", bmcRateLimited(http.HandlerFunc(srv.HandleBMCProxy)))
 	}
 
 	if oidcProvider != nil {
@@ -189,7 +190,7 @@ func main() {
 	}()
 
 	// Start session cleanup goroutine
-	go sessionCleanup(srv, &cfg.Settings)
+	go sessionCleanup(srv, &cfg.Settings, db)
 
 	// Wait for shutdown signal
 	quit := make(chan os.Signal, 1)
@@ -240,7 +241,7 @@ func spaHandler(fs http.Handler, dir string) http.Handler {
 
 // sessionCleanup periodically checks for idle sessions, cleans them up,
 // and removes stale BMC credentials.
-func sessionCleanup(srv *api.Server, cfg *models.Settings) {
+func sessionCleanup(srv *api.Server, cfg *models.Settings, db *store.DB) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
@@ -258,5 +259,15 @@ func sessionCleanup(srv *api.Server, cfg *models.Settings) {
 
 		// Clean up stale BMC credentials
 		srv.CleanupStaleBMCCreds(cfg.BMCCredsTTLMinutes)
+
+		// Purge old audit log entries (run hourly, not every minute)
+		if time.Now().Minute() == 0 {
+			cutoff := time.Now().AddDate(0, 0, -cfg.AuditRetentionDays)
+			if n, err := db.PurgeOldAuditEntries(cutoff); err != nil {
+				log.Printf("Audit purge error: %v", err)
+			} else if n > 0 {
+				log.Printf("Audit purge: removed %d old entries", n)
+			}
+		}
 	}
 }

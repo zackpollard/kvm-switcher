@@ -97,6 +97,15 @@ func (db *DB) QueryAudit(filter models.AuditFilter) ([]models.AuditEntry, error)
 	return entries, rows.Err()
 }
 
+// PurgeOldAuditEntries deletes audit log entries older than the given cutoff time.
+func (db *DB) PurgeOldAuditEntries(olderThan time.Time) (int64, error) {
+	result, err := db.Exec("DELETE FROM audit_log WHERE timestamp < ?", olderThan)
+	if err != nil {
+		return 0, fmt.Errorf("purging old audit entries: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 func nilIfEmpty(s string) *string {
 	if s == "" {
 		return nil

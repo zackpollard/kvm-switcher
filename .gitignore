@@ -1,8 +1,8 @@
 # Go binaries
 kvm-switcher
-server
-ikvm-test
-vnc-client-test
+/server
+/ikvm-test
+/vnc-client-test
 *.exe
 
 # Test artifacts

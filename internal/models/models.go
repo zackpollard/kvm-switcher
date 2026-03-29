@@ -24,11 +24,13 @@ type Settings struct {
 
 	// Production hardening settings
 	CORSOrigins        []string `yaml:"cors_origins"`          // default ["*"]
-	RateLimitRPM       int      `yaml:"rate_limit_rpm"`        // default 60
-	DBPath             string   `yaml:"db_path"`               // default "data/kvm-switcher.db"
+	RateLimitRPM         int      `yaml:"rate_limit_rpm"`           // default 60
+	BMCProxyRateLimitRPM int      `yaml:"bmc_proxy_rate_limit_rpm"` // default 300
+	DBPath               string   `yaml:"db_path"`                  // default "data/kvm-switcher.db"
 	AuditLog           *bool    `yaml:"audit_log"`             // default true (pointer for nil=default-true)
 	MetricsEnabled     bool     `yaml:"metrics_enabled"`       // default false
 	BMCCredsTTLMinutes int      `yaml:"bmc_creds_ttl_minutes"` // default 120
+	AuditRetentionDays int      `yaml:"audit_retention_days"`  // default 90
 }
 
 // OIDCConfig holds optional OIDC authentication settings.

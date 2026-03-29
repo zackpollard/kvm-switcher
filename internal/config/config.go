@@ -114,6 +114,9 @@ func setDefaults(cfg *models.AppConfig) {
 	if cfg.Settings.RateLimitRPM <= 0 {
 		cfg.Settings.RateLimitRPM = 60
 	}
+	if cfg.Settings.BMCProxyRateLimitRPM <= 0 {
+		cfg.Settings.BMCProxyRateLimitRPM = 300
+	}
 	if cfg.Settings.DBPath == "" {
 		cfg.Settings.DBPath = "data/kvm-switcher.db"
 	}
@@ -123,6 +126,9 @@ func setDefaults(cfg *models.AppConfig) {
 	}
 	if cfg.Settings.BMCCredsTTLMinutes <= 0 {
 		cfg.Settings.BMCCredsTTLMinutes = 120
+	}
+	if cfg.Settings.AuditRetentionDays <= 0 {
+		cfg.Settings.AuditRetentionDays = 90
 	}
 
 	for i := range cfg.Servers {
@@ -157,9 +163,19 @@ func applyEnvOverrides(cfg *models.AppConfig) {
 	if v := os.Getenv("KVM_METRICS_ENABLED"); v != "" {
 		cfg.Settings.MetricsEnabled = v == "true" || v == "1"
 	}
+	if v := os.Getenv("KVM_BMC_PROXY_RATE_LIMIT_RPM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Settings.BMCProxyRateLimitRPM = n
+		}
+	}
 	if v := os.Getenv("KVM_BMC_CREDS_TTL_MINUTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Settings.BMCCredsTTLMinutes = n
+		}
+	}
+	if v := os.Getenv("KVM_AUDIT_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Settings.AuditRetentionDays = n
 		}
 	}
 }
