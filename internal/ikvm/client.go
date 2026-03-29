@@ -401,7 +401,7 @@ func (c *Client) sendMessageWithPayload(msgType uint16, status uint16, payload [
 
 // SendKeyEvent sends a keyboard HID event to the BMC.
 func (c *Client) SendKeyEvent(modifiers byte, keycode byte, pressed bool) error {
-	report := buildKeyboardReport(modifiers, keycode, pressed)
+	report := BuildKeyboardReport(modifiers, keycode, pressed)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, err := c.conn.Write(report)
@@ -411,7 +411,7 @@ func (c *Client) SendKeyEvent(modifiers byte, keycode byte, pressed bool) error 
 // SendMouseEvent sends a mouse HID event to the BMC.
 // x, y are absolute coordinates (0-32767 range), buttons is a bitmask.
 func (c *Client) SendMouseEvent(buttons byte, x, y uint16, wheel int8) error {
-	report := buildAbsMouseReport(buttons, x, y, wheel)
+	report := BuildAbsMouseReport(buttons, x, y, wheel)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_, err := c.conn.Write(report)

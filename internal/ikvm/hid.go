@@ -8,10 +8,10 @@ import (
 // seqNum is the shared HID sequence counter.
 var seqNum atomic.Uint32
 
-// buildKeyboardReport builds a complete IVTP keyboard HID packet (49 bytes).
+// BuildKeyboardReport builds a complete IVTP keyboard HID packet (49 bytes).
 // Layout: [IVTPHeader 8B][IUSB Header 32B][Key data 8B + 1B pad]
 // Mirrors USBKeyboardRep.report() from JViewer.
-func buildKeyboardReport(modifiers byte, keycode byte, pressed bool) []byte {
+func BuildKeyboardReport(modifiers byte, keycode byte, pressed bool) []byte {
 	buf := make([]byte, 49)
 
 	// IVTP header: type=1 (HID), size=41, status=0
@@ -72,9 +72,9 @@ func buildKeyboardReport(modifiers byte, keycode byte, pressed bool) []byte {
 	return buf
 }
 
-// buildAbsMouseReport builds a complete IVTP absolute mouse HID packet (47 bytes).
+// BuildAbsMouseReport builds a complete IVTP absolute mouse HID packet (47 bytes).
 // x, y are in 0-32767 range. Mirrors USBMouseRep.ABSreport() from JViewer.
-func buildAbsMouseReport(buttons byte, x, y uint16, wheel int8) []byte {
+func BuildAbsMouseReport(buttons byte, x, y uint16, wheel int8) []byte {
 	buf := make([]byte, 47)
 
 	// IVTP header: type=1 (HID), size=39, status=0

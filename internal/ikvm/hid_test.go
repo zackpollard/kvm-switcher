@@ -13,7 +13,7 @@ func TestBuildKeyboardReport(t *testing.T) {
 	// Reset sequence counter for deterministic testing
 	seqNum.Store(0)
 
-	report := buildKeyboardReport(0x02, 0x04, true) // Shift + 'a', pressed
+	report := BuildKeyboardReport(0x02, 0x04, true) // Shift + 'a', pressed
 
 	// Report should be exactly 49 bytes
 	if len(report) != 49 {
@@ -117,7 +117,7 @@ func TestBuildKeyboardReport(t *testing.T) {
 func TestBuildKeyboardReportRelease(t *testing.T) {
 	seqNum.Store(100)
 
-	report := buildKeyboardReport(0x00, 0x28, false) // Return key, released
+	report := BuildKeyboardReport(0x00, 0x28, false) // Return key, released
 
 	// Down flag should be 0
 	if report[42] != 0 {
@@ -141,7 +141,7 @@ func TestBuildKeyboardReportRelease(t *testing.T) {
 func TestBuildAbsMouseReport(t *testing.T) {
 	seqNum.Store(0)
 
-	report := buildAbsMouseReport(0x01, 16383, 16383, 0) // left button, center
+	report := BuildAbsMouseReport(0x01, 16383, 16383, 0) // left button, center
 
 	// Report should be exactly 47 bytes
 	if len(report) != 47 {
@@ -221,7 +221,7 @@ func TestBuildAbsMouseReport(t *testing.T) {
 func TestBuildAbsMouseReportWithWheel(t *testing.T) {
 	seqNum.Store(50)
 
-	report := buildAbsMouseReport(0x04, 0, 32767, -1) // middle button, top-left-ish, scroll down
+	report := BuildAbsMouseReport(0x04, 0, 32767, -1) // middle button, top-left-ish, scroll down
 
 	if report[41] != 0x04 {
 		t.Errorf("Buttons = 0x%02X, want 0x04", report[41])
@@ -242,8 +242,8 @@ func TestBuildAbsMouseReportWithWheel(t *testing.T) {
 func TestKeyboardSequenceIncrement(t *testing.T) {
 	seqNum.Store(0)
 
-	r1 := buildKeyboardReport(0, 0x04, true)
-	r2 := buildKeyboardReport(0, 0x04, false)
+	r1 := BuildKeyboardReport(0, 0x04, true)
+	r2 := BuildKeyboardReport(0, 0x04, false)
 
 	seq1 := binary.LittleEndian.Uint32(r1[32:36])
 	seq2 := binary.LittleEndian.Uint32(r2[32:36])
@@ -256,8 +256,8 @@ func TestKeyboardSequenceIncrement(t *testing.T) {
 func TestMouseSequenceIncrement(t *testing.T) {
 	seqNum.Store(0)
 
-	r1 := buildAbsMouseReport(0, 100, 200, 0)
-	r2 := buildAbsMouseReport(0, 300, 400, 0)
+	r1 := BuildAbsMouseReport(0, 100, 200, 0)
+	r2 := BuildAbsMouseReport(0, 300, 400, 0)
 
 	seq1 := binary.LittleEndian.Uint32(r1[32:36])
 	seq2 := binary.LittleEndian.Uint32(r2[32:36])
