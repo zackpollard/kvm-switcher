@@ -8,20 +8,10 @@
 	let status = $state('Connecting...');
 	let connected = $state(false);
 
-	const t0 = performance.now();
-	const log = (msg: string) => console.log(`[KVM +${(performance.now() - t0).toFixed(0)}ms] ${msg}`);
-
-	log('KVMViewer component created');
-
 	onMount(async () => {
-		log('onMount start');
-
-		log('importing noVNC...');
 		const { default: RFB } = await import('@novnc/novnc');
-		log('noVNC imported');
 
 		try {
-			log(`connecting WebSocket to ${wsUrl}`);
 			rfb = new RFB(canvasContainer, wsUrl, {
 				wsProtocols: ['binary']
 			});
@@ -31,13 +21,11 @@
 			rfb.showDotCursor = true;
 
 			rfb.addEventListener('connect', () => {
-				log('VNC connected');
 				status = 'Connected';
 				connected = true;
 			});
 
 			rfb.addEventListener('disconnect', (e: any) => {
-				log(`VNC disconnected (clean=${e.detail.clean})`);
 				status = e.detail.clean ? 'Disconnected' : 'Connection lost';
 				connected = false;
 				rfb = null;
@@ -45,7 +33,6 @@
 			});
 
 			rfb.addEventListener('credentialsrequired', () => {
-				log('credentials required');
 				if (password && rfb) {
 					rfb.sendCredentials({ password });
 				} else {
@@ -54,11 +41,9 @@
 			});
 
 			rfb.addEventListener('desktopname', (e: any) => {
-				log(`desktop name: ${e.detail.name}`);
 				status = `Connected - ${e.detail.name}`;
 			});
 		} catch (e) {
-			log(`connection failed: ${e}`);
 			status = `Connection failed: ${e instanceof Error ? e.message : 'Unknown error'}`;
 		}
 

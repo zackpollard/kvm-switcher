@@ -5,10 +5,6 @@
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 
-	const pageT0 = performance.now();
-	const pageLog = (msg: string) => console.log(`[KVM-Page +${(performance.now() - pageT0).toFixed(0)}ms] ${msg}`);
-	pageLog('page script init');
-
 	let session: KVMSession | null = $state(null);
 	let activeSessionId = $state(page.params.id);
 	let error = $state('');
@@ -23,9 +19,7 @@
 
 	async function loadSession() {
 		try {
-			pageLog(`loadSession(${activeSessionId}) calling API...`);
 			session = await getSession(activeSessionId);
-			pageLog(`loadSession result: status=${session.status}`);
 			if (session.status === 'error') {
 				error = session.error || 'Session encountered an error';
 				reconnecting = false;
