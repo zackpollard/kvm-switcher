@@ -53,9 +53,9 @@
 - [x] Auth flow integration tests (OIDC -> session -> RBAC with 5 sub-tests)
 
 ### API Documentation
-- [ ] OpenAPI/Swagger spec for all REST endpoints
-- [ ] WebSocket protocol documentation (VNC proxy, iKVM bridge)
-- [ ] Document the service worker routing rules
+- [x] OpenAPI/Swagger spec for all REST endpoints (api/openapi.yaml, 22 paths, 24 schemas)
+- [x] WebSocket protocol documentation (docs/websocket-protocol.md)
+- [x] Document the service worker routing rules (docs/service-worker.md)
 
 ## Security
 
