@@ -164,8 +164,12 @@ func PollStatuses(servers []models.ServerConfig, cache *StatusCache) {
 			}
 
 			// Update circuit breaker
+			prevState := breaker.State()
 			if status.Online {
 				breaker.RecordSuccess()
+				if prevState != circuitbreaker.StateClosed {
+					log.Printf("Circuit breaker recovered for %s: %s -> closed", cfg.Name, prevState)
+				}
 			} else {
 				breaker.RecordFailure()
 			}
