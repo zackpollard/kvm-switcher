@@ -69,7 +69,7 @@
 
 <div class="flex h-full flex-col overflow-hidden">
 	{#if !connected}
-		<div class="bg-gray-900/80 px-3 py-1.5 text-center text-xs text-gray-400" role="status" aria-live="polite">
+		<div class="bg-light-100 px-3 py-1.5 text-center text-xs text-muted" role="status" aria-live="polite">
 			{status}
 		</div>
 	{/if}

@@ -4,6 +4,7 @@
 	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
+	import { Button, LoadingSpinner, Alert } from '@immich/ui';
 
 	let session: KVMSession | null = $state(null);
 	let activeSessionId = $state(page.params.id);
@@ -163,30 +164,30 @@
 
 <div class="flex h-[calc(100vh-3.5rem)] flex-col">
 	<!-- Toolbar -->
-	<div class="flex items-center justify-between border-b border-gray-800 bg-gray-900 px-4 py-2" role="toolbar" aria-label="KVM controls">
+	<div class="flex items-center justify-between border-b border-light-300 bg-light-50 px-4 py-2" role="toolbar" aria-label="KVM controls">
 		<div class="flex items-center gap-3">
-			<a href="/" class="text-sm text-gray-400 hover:text-white">&larr; Back</a>
+			<Button href="/" size="tiny" variant="ghost" color="secondary">&larr; Back</Button>
 			{#if session}
-				<span class="text-sm font-medium text-white">{session.server_name}</span>
-				<span class="font-mono text-xs text-gray-500">{session.bmc_ip}</span>
+				<span class="text-sm font-medium text-dark">{session.server_name}</span>
+				<span class="font-mono text-xs text-muted">{session.bmc_ip}</span>
 				{#if reconnecting}
-					<span class="flex items-center gap-1.5 text-xs text-yellow-400" aria-live="polite">
-						<span class="h-2 w-2 animate-pulse rounded-full bg-yellow-400" aria-hidden="true"></span>
+					<span class="flex items-center gap-1.5 text-xs text-warning" aria-live="polite">
+						<span class="h-2 w-2 animate-pulse rounded-full bg-warning" aria-hidden="true"></span>
 						Reconnecting...
 					</span>
 				{:else if session.status === 'starting'}
-					<span class="flex items-center gap-1.5 text-xs text-yellow-400" aria-live="polite">
-						<span class="h-2 w-2 animate-pulse rounded-full bg-yellow-400" aria-hidden="true"></span>
+					<span class="flex items-center gap-1.5 text-xs text-warning" aria-live="polite">
+						<span class="h-2 w-2 animate-pulse rounded-full bg-warning" aria-hidden="true"></span>
 						Starting...
 					</span>
 				{:else if session.status === 'connected'}
-					<span class="flex items-center gap-1.5 text-xs text-green-400">
-						<span class="h-2 w-2 rounded-full bg-green-400" aria-hidden="true"></span>
+					<span class="flex items-center gap-1.5 text-xs text-success">
+						<span class="h-2 w-2 rounded-full bg-success" aria-hidden="true"></span>
 						Connected
 					</span>
 				{:else if session.status === 'error'}
-					<span class="flex items-center gap-1.5 text-xs text-red-400">
-						<span class="h-2 w-2 rounded-full bg-red-400" aria-hidden="true"></span>
+					<span class="flex items-center gap-1.5 text-xs text-danger">
+						<span class="h-2 w-2 rounded-full bg-danger" aria-hidden="true"></span>
 						Error
 					</span>
 				{/if}
@@ -194,96 +195,97 @@
 		</div>
 
 		<div class="flex items-center gap-2">
-			<button
-				onclick={sendCtrlAltDel}
-				class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
-			>
+			<Button onclick={sendCtrlAltDel} size="tiny" variant="outline" color="secondary">
 				Ctrl+Alt+Del
-			</button>
+			</Button>
 			{#if isIKVM}
 				<div class="relative">
-					<button
+					<Button
 						onclick={() => { showPowerMenu = !showPowerMenu; showMouseMenu = false; showKbdMenu = false; }}
-						class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+						size="tiny"
+						variant="outline"
+						color="secondary"
 						aria-haspopup="true"
 						aria-expanded={showPowerMenu}
 					>
 						Power
-					</button>
+					</Button>
 					{#if showPowerMenu}
-						<div class="absolute right-0 top-full z-50 mt-1 w-40 rounded border border-gray-700 bg-gray-800 py-1 shadow-lg" role="menu">
-							<button onclick={() => handlePower('on')} class="block w-full px-3 py-1.5 text-left text-xs text-green-400 hover:bg-gray-700" role="menuitem">Power On</button>
-							<button onclick={() => handlePower('off')} class="block w-full px-3 py-1.5 text-left text-xs text-red-400 hover:bg-gray-700" role="menuitem">Power Off</button>
-							<button onclick={() => handlePower('cycle')} class="block w-full px-3 py-1.5 text-left text-xs text-yellow-400 hover:bg-gray-700" role="menuitem">Power Cycle</button>
-							<button onclick={() => handlePower('reset')} class="block w-full px-3 py-1.5 text-left text-xs text-yellow-400 hover:bg-gray-700" role="menuitem">Hard Reset</button>
-							<button onclick={() => handlePower('soft_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-orange-400 hover:bg-gray-700" role="menuitem">Soft Reset</button>
-							<hr class="my-1 border-gray-700" />
-							<button onclick={() => handlePower('bmc_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-purple-400 hover:bg-gray-700" role="menuitem">BMC Cold Reset</button>
+						<div class="absolute right-0 top-full z-50 mt-1 w-40 rounded border border-light-300 bg-light-50 py-1 shadow-lg" role="menu">
+							<button onclick={() => handlePower('on')} class="block w-full px-3 py-1.5 text-left text-xs text-success hover:bg-light-200" role="menuitem">Power On</button>
+							<button onclick={() => handlePower('off')} class="block w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-light-200" role="menuitem">Power Off</button>
+							<button onclick={() => handlePower('cycle')} class="block w-full px-3 py-1.5 text-left text-xs text-warning hover:bg-light-200" role="menuitem">Power Cycle</button>
+							<button onclick={() => handlePower('reset')} class="block w-full px-3 py-1.5 text-left text-xs text-warning hover:bg-light-200" role="menuitem">Hard Reset</button>
+							<button onclick={() => handlePower('soft_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-warning hover:bg-light-200" role="menuitem">Soft Reset</button>
+							<hr class="my-1 border-light-300" />
+							<button onclick={() => handlePower('bmc_reset')} class="block w-full px-3 py-1.5 text-left text-xs text-primary hover:bg-light-200" role="menuitem">BMC Cold Reset</button>
 						</div>
 					{/if}
 				</div>
-				<button
+				<Button
 					onclick={toggleDisplayLock}
-					class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					size="tiny"
+					variant="outline"
+					color="secondary"
 					title="Lock host display"
 				>
 					Lock Display
-				</button>
-				<button
+				</Button>
+				<Button
 					onclick={resetVideo}
-					class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+					size="tiny"
+					variant="outline"
+					color="secondary"
 					title="Reset video capture engine (fixes stuck/corrupted display)"
 				>
 					Reset Video
-				</button>
+				</Button>
 				<div class="relative">
-					<button
+					<Button
 						onclick={() => { showMouseMenu = !showMouseMenu; showKbdMenu = false; showPowerMenu = false; }}
-						class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+						size="tiny"
+						variant="outline"
+						color="secondary"
 						aria-haspopup="true"
 						aria-expanded={showMouseMenu}
 					>
 						Mouse
-					</button>
+					</Button>
 					{#if showMouseMenu}
-						<div class="absolute right-0 top-full z-50 mt-1 w-32 rounded border border-gray-700 bg-gray-800 py-1 shadow-lg" role="menu">
-							<button onclick={() => { setMouseMode('absolute'); showMouseMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">Absolute</button>
-							<button onclick={() => { setMouseMode('relative'); showMouseMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">Relative</button>
+						<div class="absolute right-0 top-full z-50 mt-1 w-32 rounded border border-light-300 bg-light-50 py-1 shadow-lg" role="menu">
+							<button onclick={() => { setMouseMode('absolute'); showMouseMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">Absolute</button>
+							<button onclick={() => { setMouseMode('relative'); showMouseMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">Relative</button>
 						</div>
 					{/if}
 				</div>
 				<div class="relative">
-					<button
+					<Button
 						onclick={() => { showKbdMenu = !showKbdMenu; showMouseMenu = false; showPowerMenu = false; }}
-						class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
+						size="tiny"
+						variant="outline"
+						color="secondary"
 						aria-haspopup="true"
 						aria-expanded={showKbdMenu}
 					>
 						Keyboard
-					</button>
+					</Button>
 					{#if showKbdMenu}
-						<div class="absolute right-0 top-full z-50 mt-1 w-32 rounded border border-gray-700 bg-gray-800 py-1 shadow-lg" role="menu">
-							<button onclick={() => { setKeyboard('en'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">English</button>
-							<button onclick={() => { setKeyboard('fr'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">French</button>
-							<button onclick={() => { setKeyboard('de'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">German</button>
-							<button onclick={() => { setKeyboard('es'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">Spanish</button>
-							<button onclick={() => { setKeyboard('jp'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-gray-700" role="menuitem">Japanese</button>
+						<div class="absolute right-0 top-full z-50 mt-1 w-32 rounded border border-light-300 bg-light-50 py-1 shadow-lg" role="menu">
+							<button onclick={() => { setKeyboard('en'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">English</button>
+							<button onclick={() => { setKeyboard('fr'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">French</button>
+							<button onclick={() => { setKeyboard('de'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">German</button>
+							<button onclick={() => { setKeyboard('es'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">Spanish</button>
+							<button onclick={() => { setKeyboard('jp'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-200" role="menuitem">Japanese</button>
 						</div>
 					{/if}
 				</div>
 			{/if}
-			<button
-				onclick={toggleFullscreen}
-				class="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-700 hover:text-white"
-			>
+			<Button onclick={toggleFullscreen} size="tiny" variant="outline" color="secondary">
 				{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-			</button>
-			<button
-				onclick={disconnect}
-				class="rounded bg-red-900 px-3 py-1.5 text-xs text-red-200 hover:bg-red-800"
-			>
+			</Button>
+			<Button onclick={disconnect} size="tiny" variant="filled" color="danger">
 				Disconnect
-			</button>
+			</Button>
 		</div>
 	</div>
 
@@ -300,32 +302,32 @@
 		{#if error}
 			<div class="flex h-full items-center justify-center" role="alert">
 				<div class="text-center">
-					<p class="text-red-400">{error}</p>
-					<button
+					<Alert color="danger" title={error} />
+					<Button
 						onclick={() => goto('/')}
-						class="mt-4 rounded bg-gray-800 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+						size="small"
+						variant="outline"
+						color="secondary"
+						class="mt-4"
 					>
 						Back to Servers
-					</button>
+					</Button>
 				</div>
 			</div>
 		{:else if reconnecting}
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
-					<p class="text-gray-400">Connection lost</p>
-					<button
-						onclick={reconnect}
-						class="mt-4 rounded bg-blue-700 px-4 py-2 text-sm text-white hover:bg-blue-600"
-					>
+					<p class="text-muted">Connection lost</p>
+					<Button onclick={reconnect} size="small" variant="filled" color="primary" class="mt-4">
 						Reconnect
-					</button>
+					</Button>
 				</div>
 			</div>
 		{:else if session?.status === 'starting'}
 			<div class="flex h-full items-center justify-center" aria-live="polite">
 				<div class="text-center">
-					<div class="mx-auto h-10 w-10 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400" role="status" aria-label="Loading"></div>
-					<p class="mt-4 text-gray-400">Starting KVM session...</p>
+					<LoadingSpinner size="large" />
+					<p class="mt-4 text-muted">Starting KVM session...</p>
 				</div>
 			</div>
 		{:else if session?.status === 'connected'}
@@ -333,13 +335,16 @@
 		{:else if session?.status === 'disconnected'}
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
-					<p class="text-gray-400">Session disconnected</p>
-					<button
+					<p class="text-muted">Session disconnected</p>
+					<Button
 						onclick={() => goto('/')}
-						class="mt-4 rounded bg-gray-800 px-4 py-2 text-sm text-gray-300 hover:bg-gray-700"
+						size="small"
+						variant="outline"
+						color="secondary"
+						class="mt-4"
 					>
 						Back to Servers
-					</button>
+					</Button>
 				</div>
 			</div>
 		{/if}

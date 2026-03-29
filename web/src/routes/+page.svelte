@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { fetchServers, createSession, createIPMISession, fetchServerStatuses, type ServerInfo, type DeviceStatus } from '$lib/api';
 	import { goto } from '$app/navigation';
+	import { Alert, Badge, Button, LoadingSpinner, Card, CardHeader, CardBody, CardFooter } from '@immich/ui';
 
 	let servers: ServerInfo[] = $state([]);
 	let statuses: Record<string, DeviceStatus> = $state({});
@@ -40,10 +41,10 @@
 	}
 
 	function healthColor(h?: string): string {
-		if (h === 'ok' || h === 'OK') return 'text-green-400';
-		if (h === 'warning' || h === 'Warning') return 'text-yellow-400';
-		if (h === 'critical' || h === 'Critical') return 'text-red-400';
-		return 'text-gray-500';
+		if (h === 'ok' || h === 'OK') return 'text-success';
+		if (h === 'warning' || h === 'Warning') return 'text-warning';
+		if (h === 'critical' || h === 'Critical') return 'text-danger';
+		return 'text-muted';
 	}
 
 	async function loadServers() {
@@ -128,173 +129,189 @@
 <div class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
 	<div class="mb-8 flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold text-white">Infrastructure</h1>
-			<p class="mt-1 text-sm text-gray-400">Manage servers, KVM consoles, and power devices.</p>
+			<h1 class="text-2xl font-bold text-dark">Infrastructure</h1>
+			<p class="mt-1 text-sm text-muted">Manage servers, KVM consoles, and power devices.</p>
 		</div>
-		<button
+		<Button
 			onclick={() => { loadServers(); loadStatuses(); }}
-			class="rounded-md bg-gray-800 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white"
+			size="small"
+			variant="outline"
+			color="secondary"
 		>
 			Refresh
-		</button>
+		</Button>
 	</div>
 
 	{#if error}
-		<div role="alert" class="mb-6 rounded-md border border-red-800 bg-red-900/50 px-4 py-3 text-sm text-red-200">
-			{error}
+		<div class="mb-6" role="alert">
+			<Alert color="danger" title={error} />
 		</div>
 	{/if}
 
 	{#if loading && servers.length === 0}
 		<div class="flex items-center justify-center py-20" aria-live="polite">
-			<div class="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-blue-400" role="status" aria-label="Loading"></div>
-			<span class="ml-3 text-gray-400">Loading...</span>
+			<LoadingSpinner size="large" />
+			<span class="ml-3 text-muted">Loading...</span>
 		</div>
 	{:else if servers.length === 0}
-		<div class="rounded-lg border border-gray-800 bg-gray-900 py-16 text-center">
-			<p class="text-gray-400">No devices configured.</p>
-			<p class="mt-1 text-sm text-gray-500">Add servers to configs/servers.yaml</p>
-		</div>
+		<Card color="secondary">
+			<CardBody>
+				<div class="py-10 text-center">
+					<p class="text-muted">No devices configured.</p>
+					<p class="mt-1 text-sm text-muted">Add servers to configs/servers.yaml</p>
+				</div>
+			</CardBody>
+		</Card>
 	{:else}
 		{#each groupedServers() as group}
 			<div class="mb-8">
-				<h2 class="mb-4 text-lg font-semibold text-gray-300">{group.label}</h2>
+				<h2 class="mb-4 text-lg font-semibold text-dark">{group.label}</h2>
 				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					{#each group.servers as server}
 						{@const st = statuses[server.name]}
-						<div class="rounded-lg border border-gray-800 bg-gray-900 p-5 transition-colors hover:border-gray-700">
-							<!-- Header -->
-							<div class="mb-3 flex items-start justify-between">
-								<div class="flex items-center gap-2">
-									{#if st}
-										<span class="h-2.5 w-2.5 rounded-full {st.online ? 'bg-green-400' : 'bg-red-500'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
-									{:else}
-										<span class="h-2.5 w-2.5 rounded-full bg-gray-600" title="Unknown" aria-label="Status unknown" role="img"></span>
-									{/if}
-									<h3 class="text-lg font-semibold text-white">{server.name} <span class="text-sm font-normal text-gray-500">({server.bmc_ip})</span></h3>
-								</div>
-								<span class="rounded-full bg-gray-800 px-2.5 py-0.5 text-xs text-gray-400">
-									{boardLabel(server.board_type)}
-								</span>
-							</div>
-
-							<!-- Stats -->
-							<div class="mb-3 space-y-1 text-sm">
-								{#if st?.model}
-									<p class="text-gray-300">{st.model}</p>
-								{/if}
-								{#if server.board_type !== 'apc_ups'}
-									<!-- Server stats -->
-									{#if st?.power_state}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Power:</span>
-											<span class={st.power_state === 'on' ? 'text-green-400' : 'text-red-400'}>
-												{st.power_state === 'on' ? 'On' : 'Off'}
-											</span>
-											{#if st.load_watts}
-												<span class="text-gray-500">({st.load_watts}W)</span>
-											{/if}
-										</div>
-									{/if}
-									{#if st?.health}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Health:</span>
-											<span class={healthColor(st.health)}>{st.health}</span>
-										</div>
-									{/if}
-									{#if st?.temperature_c}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Temp:</span>
-											<span class="text-gray-300">{st.temperature_c}°C</span>
-										</div>
-									{/if}
-									{#if st?.app_version || st?.image_version}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Version:</span>
-											<span class="text-gray-300">{st.app_version || ''}</span>
-											{#if st.image_version}
-												<span class="text-gray-500">({st.image_version})</span>
-											{/if}
-											{#if st.update_available}
-												<span class="rounded-full bg-yellow-900/50 px-2 py-0.5 text-xs text-yellow-400">Update</span>
-											{/if}
-										</div>
-									{/if}
-								{:else}
-									<!-- APC UPS/PDU stats -->
-									{#if st?.load_watts || st?.load_pct || st?.load_amps}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Load:</span>
-											{#if st.load_watts}<span class="text-gray-300">{st.load_watts}W</span>{/if}
-											{#if st.load_pct}<span class="text-gray-300">{st.load_pct}%</span>{/if}
-											{#if st.load_amps}<span class="text-gray-400">({st.load_amps}A)</span>{/if}
-										</div>
-									{/if}
-									{#if st?.voltage}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Voltage:</span>
-											<span class="text-gray-300">{st.voltage}V</span>
-										</div>
-									{/if}
-									{#if st?.battery_pct != null && st.battery_pct > 0}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Battery:</span>
-											<span class={st.battery_pct > 50 ? 'text-green-400' : st.battery_pct > 20 ? 'text-yellow-400' : 'text-red-400'}>
-												{st.battery_pct}%
-											</span>
-											{#if st.runtime_min}
-												<span class="text-gray-500">({st.runtime_min} min)</span>
-											{/if}
-										</div>
-									{/if}
-									{#if st?.temperature_c}
-										<div class="flex items-center gap-2">
-											<span class="text-gray-500">Temp:</span>
-											<span class="text-gray-300">{st.temperature_c}°C</span>
-										</div>
-									{/if}
-								{/if}
-								{#if !st}
-									<p class="font-mono text-xs text-gray-500">{server.bmc_ip}</p>
-								{/if}
-							</div>
-
-							<!-- Actions -->
-							<div class="flex items-center justify-between border-t border-gray-800 pt-3">
-								{#if server.has_active_session}
-									<span class="text-xs text-green-400">Session active</span>
-								{:else}
-									<span></span>
-								{/if}
-
-								<div class="flex items-center gap-2">
-									<button
-										onclick={() => openIPMI(server.name)}
-										disabled={openingIPMI === server.name}
-										class="rounded-md bg-gray-700 px-3 py-1.5 text-sm font-medium text-gray-200 hover:bg-gray-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-									>
-										{#if openingIPMI === server.name}
-											Opening...
+						<Card color="secondary" class="transition-colors hover:border-light-400">
+							<CardHeader>
+								<div class="flex items-start justify-between">
+									<div class="flex items-center gap-2">
+										{#if st}
+											<span class="h-2.5 w-2.5 rounded-full {st.online ? 'bg-success' : 'bg-danger'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
 										{:else}
-											{server.board_type === 'apc_ups' ? 'Panel' : server.board_type === 'nanokvm' ? 'KVM' : 'IPMI'}
+											<span class="h-2.5 w-2.5 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
 										{/if}
-									</button>
-									{#if server.board_type !== 'apc_ups' && server.board_type !== 'nanokvm'}
-										<button
-											onclick={() => connect(server.name, server.active_session_id)}
-											disabled={connecting === server.name}
-											class="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-										>
-											{#if connecting === server.name}
-												Connecting...
-											{:else}
-												KVM
-											{/if}
-										</button>
+										<h3 class="text-lg font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
+									</div>
+									<Badge size="tiny" color="secondary" shape="round">
+										{boardLabel(server.board_type)}
+									</Badge>
+								</div>
+							</CardHeader>
+
+							<CardBody>
+								<!-- Stats -->
+								<div class="space-y-1 text-sm">
+									{#if st?.model}
+										<p class="text-dark">{st.model}</p>
+									{/if}
+									{#if server.board_type !== 'apc_ups'}
+										<!-- Server stats -->
+										{#if st?.power_state}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Power:</span>
+												<span class={st.power_state === 'on' ? 'text-success' : 'text-danger'}>
+													{st.power_state === 'on' ? 'On' : 'Off'}
+												</span>
+												{#if st.load_watts}
+													<span class="text-muted">({st.load_watts}W)</span>
+												{/if}
+											</div>
+										{/if}
+										{#if st?.health}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Health:</span>
+												<span class={healthColor(st.health)}>{st.health}</span>
+											</div>
+										{/if}
+										{#if st?.temperature_c}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Temp:</span>
+												<span class="text-dark">{st.temperature_c}&deg;C</span>
+											</div>
+										{/if}
+										{#if st?.app_version || st?.image_version}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Version:</span>
+												<span class="text-dark">{st.app_version || ''}</span>
+												{#if st.image_version}
+													<span class="text-muted">({st.image_version})</span>
+												{/if}
+												{#if st.update_available}
+													<Badge size="tiny" color="warning" shape="round">Update</Badge>
+												{/if}
+											</div>
+										{/if}
+									{:else}
+										<!-- APC UPS/PDU stats -->
+										{#if st?.load_watts || st?.load_pct || st?.load_amps}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Load:</span>
+												{#if st.load_watts}<span class="text-dark">{st.load_watts}W</span>{/if}
+												{#if st.load_pct}<span class="text-dark">{st.load_pct}%</span>{/if}
+												{#if st.load_amps}<span class="text-muted">({st.load_amps}A)</span>{/if}
+											</div>
+										{/if}
+										{#if st?.voltage}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Voltage:</span>
+												<span class="text-dark">{st.voltage}V</span>
+											</div>
+										{/if}
+										{#if st?.battery_pct != null && st.battery_pct > 0}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Battery:</span>
+												<span class={st.battery_pct > 50 ? 'text-success' : st.battery_pct > 20 ? 'text-warning' : 'text-danger'}>
+													{st.battery_pct}%
+												</span>
+												{#if st.runtime_min}
+													<span class="text-muted">({st.runtime_min} min)</span>
+												{/if}
+											</div>
+										{/if}
+										{#if st?.temperature_c}
+											<div class="flex items-center gap-2">
+												<span class="text-muted">Temp:</span>
+												<span class="text-dark">{st.temperature_c}&deg;C</span>
+											</div>
+										{/if}
+									{/if}
+									{#if !st}
+										<p class="font-mono text-xs text-muted">{server.bmc_ip}</p>
 									{/if}
 								</div>
-							</div>
-						</div>
+							</CardBody>
+
+							<CardFooter>
+								<div class="flex w-full items-center justify-between">
+									{#if server.has_active_session}
+										<span class="text-xs text-success">Session active</span>
+									{:else}
+										<span></span>
+									{/if}
+
+									<div class="flex items-center gap-2">
+										<Button
+											onclick={() => openIPMI(server.name)}
+											disabled={openingIPMI === server.name}
+											size="small"
+											variant="outline"
+											color="secondary"
+											loading={openingIPMI === server.name}
+										>
+											{#if openingIPMI === server.name}
+												Opening...
+											{:else}
+												{server.board_type === 'apc_ups' ? 'Panel' : server.board_type === 'nanokvm' ? 'KVM' : 'IPMI'}
+											{/if}
+										</Button>
+										{#if server.board_type !== 'apc_ups' && server.board_type !== 'nanokvm'}
+											<Button
+												onclick={() => connect(server.name, server.active_session_id)}
+												disabled={connecting === server.name}
+												size="small"
+												variant="filled"
+												color="primary"
+												loading={connecting === server.name}
+											>
+												{#if connecting === server.name}
+													Connecting...
+												{:else}
+													KVM
+												{/if}
+											</Button>
+										{/if}
+									</div>
+								</div>
+							</CardFooter>
+						</Card>
 					{/each}
 				</div>
 			</div>

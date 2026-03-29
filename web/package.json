@@ -30,6 +30,8 @@
 		"vitest": "^4.1.0"
 	},
 	"dependencies": {
+		"@immich/ui": "^0.69.0",
+		"@mdi/js": "^7.4.47",
 		"@novnc/novnc": "github:novnc/noVNC"
 	}
 }

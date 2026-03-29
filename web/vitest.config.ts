@@ -11,7 +11,9 @@ export default defineConfig({
 		alias: {
 			'$lib': '/src/lib',
 			'$app/state': '/src/tests/mocks/app-state.ts',
-			'$app/navigation': '/src/tests/mocks/app-navigation.ts'
+			'$app/navigation': '/src/tests/mocks/app-navigation.ts',
+			'$env/dynamic/public': '/src/tests/mocks/env-dynamic-public.ts',
+			'$app/environment': '/src/tests/mocks/app-environment.ts'
 		}
 	},
 	resolve: {

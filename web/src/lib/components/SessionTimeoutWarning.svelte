@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { keepAliveSession } from '$lib/api';
+	import { Button } from '@immich/ui';
 
 	interface Props {
 		sessionId: string;
@@ -61,8 +62,8 @@
 		role="alert"
 		aria-live="assertive"
 		class="flex items-center gap-3 px-4 py-2 text-sm {level === 'critical'
-			? 'bg-red-900/80 text-red-200'
-			: 'bg-yellow-900/80 text-yellow-200'}"
+			? 'bg-danger-100 text-danger'
+			: 'bg-warning-100 text-warning'}"
 	>
 		<span>
 			{#if level === 'critical'}
@@ -71,12 +72,14 @@
 				Session idle timeout in <strong>{formatTime(localCountdown)}</strong>
 			{/if}
 		</span>
-		<button
+		<Button
 			onclick={handleKeepAlive}
 			disabled={keepingAlive}
-			class="rounded bg-white/20 px-3 py-1 text-xs font-medium hover:bg-white/30 disabled:opacity-50"
+			size="tiny"
+			variant="outline"
+			color={level === 'critical' ? 'danger' : 'warning'}
 		>
 			{keepingAlive ? 'Extending...' : 'Stay connected'}
-		</button>
+		</Button>
 	</div>
 {/if}
