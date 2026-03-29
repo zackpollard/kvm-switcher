@@ -307,17 +307,6 @@ func (b *Bridge) ServeWebSocket(ws *websocket.Conn) error {
 	return err
 }
 
-// Serve is the legacy entry point that combines Start + ServeWebSocket + Stop.
-// It connects to the BMC, serves a single WebSocket client, and stops when
-// the client disconnects. Preserved for backward compatibility.
-func (b *Bridge) Serve(ws *websocket.Conn) error {
-	if err := b.Start(context.Background()); err != nil {
-		return err
-	}
-	defer b.Stop()
-	return b.ServeWebSocket(ws)
-}
-
 // onVideoFrame is called by the IVTP client when a complete video frame arrives.
 func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 	b.fbMu.Lock()
