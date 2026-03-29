@@ -22,7 +22,7 @@
 ## Reliability / UX
 
 ### Service Worker
-- [ ] Refactor 3-layer fallback routing (clientId -> Referer -> lastActiveServer) into a cleaner state machine
+- [x] Refactor routing into routeRequest() with labeled tiers and decision tree comment
 - [x] Fix intermittent "404 no servers found" — clear lastActiveServer on app-route navigation, add / and /kvm/ to isAppRoute
 - [x] Add diagnostic logging for client mapping failures (DEBUG flag, 8 console.debug calls)
 
@@ -34,7 +34,7 @@
 
 ### Error Handling
 - [x] Surface proxy errors to the user (styled HTML error page with retry button)
-- [ ] Better feedback when BMC web UI fails to load (instead of blank iframe)
+- [x] Per-card error feedback for IPMI/KVM failures (auto-clears after 5s)
 - [x] Retry logic for transient BMC authentication failures (3 attempts, 2s backoff)
 
 ## Code Quality

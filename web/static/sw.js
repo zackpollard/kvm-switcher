@@ -3,6 +3,10 @@
 
 const DEBUG = false;
 
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
 const clientServerMap = new Map(); // clientId -> serverName
 const knownServers = new Set(); // server names confirmed via navigation
 const nanoKVMServers = new Set(); // server names that are NanoKVM devices
@@ -11,6 +15,10 @@ const nanoKVMServers = new Set(); // server names that are NanoKVM devices
 // both fail (e.g., after BMC JS navigates the top frame to "/index.html").
 let lastActiveServer = null;
 
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
 self.addEventListener('install', () => {
 	self.skipWaiting();
 });
@@ -18,6 +26,10 @@ self.addEventListener('install', () => {
 self.addEventListener('activate', (event) => {
 	event.waitUntil(self.clients.claim());
 });
+
+// ---------------------------------------------------------------------------
+// Path helpers
+// ---------------------------------------------------------------------------
 
 // Extract server name from a /ipmi/{name}/... path
 function extractServerName(path) {
@@ -39,88 +51,9 @@ function isAppRoute(path) {
 	);
 }
 
-self.addEventListener('fetch', (event) => {
-	const url = new URL(event.request.url);
-
-	// Only handle same-origin requests
-	if (url.origin !== self.location.origin) return;
-
-	const path = url.pathname;
-
-	// Passthrough: app traffic and internal proxy path.
-	// When navigating back to an app route, clear the lastActiveServer so
-	// subsequent requests (favicon, SW scope checks, etc.) aren't misrouted.
-	if (isAppRoute(path)) {
-		if (event.request.mode === 'navigate') {
-			if (DEBUG) console.debug('[SW] App-route navigation, clearing lastActiveServer (was %s): %s', lastActiveServer, path);
-			lastActiveServer = null;
-		}
-		// Exception: /api/* and /ws/* requests from NanoKVM pages need to be
-		// proxied to the NanoKVM device (its SPA uses absolute /api/ paths
-		// that would otherwise hit our server's own API).
-		if (path.startsWith('/api/') || path.startsWith('/ws/')) {
-			const clientName = event.clientId ? clientServerMap.get(event.clientId) : null;
-			if (clientName && nanoKVMServers.has(clientName)) {
-				if (DEBUG) console.debug('[SW] NanoKVM /api/ intercept: %s -> server %s', path, clientName);
-				event.respondWith(proxyToBMC(event.request, clientName, path + url.search));
-				return;
-			}
-		}
-		return;
-	}
-
-	// /ipmi/{name}/... -> extract name, track client, rewrite to /__bmc/{name}/...
-	const name = extractServerName(path);
-	if (name) {
-		// For navigation requests, the name is authoritative — add to known set.
-		// For sub-resource requests, only trust the name if we've seen it before
-		// in a navigation. This prevents false extractions like /ipmi/images/progress.gif
-		// (from ../images/progress.gif relative paths) from being treated as server names.
-		if (event.request.mode === 'navigate') {
-			knownServers.add(name);
-		}
-
-		if (knownServers.has(name)) {
-			const rest = path.slice('/ipmi/'.length + name.length) || '/';
-			if (event.clientId) clientServerMap.set(event.clientId, name);
-			if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
-			lastActiveServer = name;
-			if (DEBUG) console.debug('[SW] /ipmi/ route: %s -> server %s (rest: %s)', path, name, rest);
-			event.respondWith(proxyToBMC(event.request, name, rest + url.search));
-			return;
-		}
-
-		// False extraction (e.g., /ipmi/images/progress.gif from a relative
-		// ../images/progress.gif on a BMC page). Strip the /ipmi/ prefix to
-		// recover the real BMC path and proxy via the active server.
-		const bmcPath = '/' + path.slice('/ipmi/'.length);
-		const serverName = resolveServer(event);
-		if (serverName) {
-			event.respondWith(proxyToBMC(event.request, serverName, bmcPath + url.search));
-			return;
-		}
-	}
-
-	// Resolve which BMC server this request belongs to
-	let serverName = resolveServer(event);
-
-	if (serverName) {
-		if (DEBUG) console.debug('[SW] Resolved request: %s -> server %s (mode: %s)', path, serverName, event.request.mode);
-		// For navigation requests not already under /ipmi/{name}/, redirect
-		// so the browser URL bar shows the correct prefixed path. This
-		// prevents the BMC's JS navigations (e.g., top.location = "/login.html")
-		// from losing the /ipmi/ prefix.
-		if (event.request.mode === 'navigate') {
-			const redirectUrl = '/ipmi/' + serverName + path + url.search;
-			event.respondWith(Response.redirect(redirectUrl, 302));
-			return;
-		}
-		event.respondWith(proxyToBMC(event.request, serverName, path + url.search));
-		return;
-	}
-
-	// Not mapped — pass through (regular app page)
-});
+// ---------------------------------------------------------------------------
+// Client tracking
+// ---------------------------------------------------------------------------
 
 // Map a resolved server name to both the initiating and resulting clients.
 // For navigations (e.g., BMC JS doing top.location = "/page/login.html"),
@@ -137,11 +70,15 @@ function trackClient(event, name) {
 	}
 }
 
-// Determine which BMC server a non-/ipmi/ request belongs to.
-function resolveServer(event) {
-	const clientId = event.clientId;
+// ---------------------------------------------------------------------------
+// Server resolution (3-tier fallback)
+// ---------------------------------------------------------------------------
 
-	// 1. Check client -> server map
+// Determine which BMC server a non-/ipmi/ request belongs to.
+// Tiers: clientId map -> Referer -> lastActiveServer
+function resolveServer(event) {
+	// Tier 1: clientId -> server map (most reliable)
+	const clientId = event.clientId;
 	if (clientId) {
 		const name = clientServerMap.get(clientId);
 		if (name) {
@@ -153,7 +90,7 @@ function resolveServer(event) {
 		}
 	}
 
-	// 2. Check Referer for /ipmi/{name}/... pattern
+	// Tier 2: Referer header contains /ipmi/{name}/...
 	const referer = event.request.referrer;
 	if (referer) {
 		try {
@@ -166,14 +103,11 @@ function resolveServer(event) {
 				}
 
 				// Referer is a non-/ipmi/ BMC page (e.g., /page/login.html after
-				// the BMC redirected the top frame). Check if the referrer's client
-				// is mapped, or fall through to lastActiveServer.
-				// If referer is a non-app path, it's likely a BMC sub-page.
-				if (!isAppRoute(refUrl.pathname) && refUrl.pathname !== '/') {
-					if (lastActiveServer) {
-						trackClient(event, lastActiveServer);
-						return lastActiveServer;
-					}
+				// the BMC redirected the top frame). If it's not an app route, it's
+				// likely a BMC sub-page — use lastActiveServer.
+				if (!isAppRoute(refUrl.pathname) && refUrl.pathname !== '/' && lastActiveServer) {
+					trackClient(event, lastActiveServer);
+					return lastActiveServer;
 				}
 			}
 		} catch (e) {
@@ -181,23 +115,142 @@ function resolveServer(event) {
 		}
 	}
 
-	// 3. Fallback: if we're loading a non-app resource and have a lastActiveServer,
-	//    it's almost certainly a BMC sub-resource. The main app only loads from
-	//    /api/, /_app/, /auth/, /ws/ — all of which are excluded above.
-	//    Paths like /index.html, /page/login.html, /rpc/... are BMC content.
-	if (lastActiveServer) {
-		// Don't intercept the root SPA page itself or known SvelteKit routes
-		const path = new URL(event.request.url).pathname;
-		if (path === '/' || path.startsWith('/kvm/')) {
-			return null;
-		}
-		if (DEBUG) console.debug('[SW] resolveServer: falling back to lastActiveServer %s for %s', lastActiveServer, path);
-		trackClient(event, lastActiveServer);
-		return lastActiveServer;
+	// Tier 3: lastActiveServer fallback for non-app resources.
+	// The main app only loads from /api/, /_app/, /auth/, /ws/ — all excluded
+	// by isAppRoute(). Paths like /index.html, /page/login.html, /rpc/... are
+	// BMC content.
+	if (!lastActiveServer) return null;
+
+	// Don't intercept the root SPA page itself or known SvelteKit routes
+	const path = new URL(event.request.url).pathname;
+	if (path === '/' || path.startsWith('/kvm/')) return null;
+
+	if (DEBUG) console.debug('[SW] resolveServer: falling back to lastActiveServer %s for %s', lastActiveServer, path);
+	trackClient(event, lastActiveServer);
+	return lastActiveServer;
+}
+
+// ---------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------
+
+// Routing decision tree:
+// 1. Same-origin only (skip cross-origin)
+// 2. App routes -> passthrough (clear lastActiveServer on navigate)
+//    Exception: NanoKVM /api/ and /ws/ -> proxy to device
+// 3. /ipmi/{name}/... with known server -> proxy to /__bmc/{name}/...
+// 4. /ipmi/{unknown}/... -> false extraction, resolve via active server
+// 5. Non-app path with resolved server:
+//    - Navigate -> redirect to /ipmi/{name}/path
+//    - Subresource -> proxy to /__bmc/{name}/path
+// 6. No server resolved -> passthrough (regular app content)
+
+// Evaluate the routing decision for a fetch event.
+// Returns { action, serverName?, path? } describing what the fetch handler
+// should do, making the decision tree explicit and testable.
+function routeRequest(event) {
+	const url = new URL(event.request.url);
+
+	// 1. Cross-origin -> passthrough
+	if (url.origin !== self.location.origin) {
+		return { action: 'passthrough' };
 	}
 
-	return null;
+	const path = url.pathname;
+	const search = url.search;
+
+	// 2. App routes -> passthrough (with NanoKVM exception)
+	if (isAppRoute(path)) {
+		// Clear lastActiveServer on app-route navigation so subsequent
+		// requests (favicon, SW scope checks, etc.) aren't misrouted.
+		if (event.request.mode === 'navigate') {
+			if (DEBUG) console.debug('[SW] App-route navigation, clearing lastActiveServer (was %s): %s', lastActiveServer, path);
+			lastActiveServer = null;
+		}
+
+		// Exception: /api/* and /ws/* requests from NanoKVM pages need to be
+		// proxied to the NanoKVM device (its SPA uses absolute /api/ paths
+		// that would otherwise hit our server's own API).
+		if (path.startsWith('/api/') || path.startsWith('/ws/')) {
+			const clientName = event.clientId ? clientServerMap.get(event.clientId) : null;
+			if (clientName && nanoKVMServers.has(clientName)) {
+				if (DEBUG) console.debug('[SW] NanoKVM /api/ intercept: %s -> server %s', path, clientName);
+				return { action: 'proxy', serverName: clientName, path: path + search };
+			}
+		}
+
+		return { action: 'passthrough' };
+	}
+
+	// 3. /ipmi/{name}/... with known server -> proxy
+	const name = extractServerName(path);
+	if (name) {
+		// For navigation requests, the name is authoritative — add to known set.
+		// For sub-resource requests, only trust the name if we've seen it before
+		// in a navigation. This prevents false extractions like /ipmi/images/progress.gif
+		// (from ../images/progress.gif relative paths) from being treated as server names.
+		if (event.request.mode === 'navigate') {
+			knownServers.add(name);
+		}
+
+		if (knownServers.has(name)) {
+			const rest = path.slice('/ipmi/'.length + name.length) || '/';
+			if (event.clientId) clientServerMap.set(event.clientId, name);
+			if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
+			lastActiveServer = name;
+			if (DEBUG) console.debug('[SW] /ipmi/ route: %s -> server %s (rest: %s)', path, name, rest);
+			return { action: 'proxy', serverName: name, path: rest + search };
+		}
+
+		// 4. False extraction (e.g., /ipmi/images/progress.gif from a relative
+		// ../images/progress.gif on a BMC page). Strip the /ipmi/ prefix to
+		// recover the real BMC path and proxy via the active server.
+		const bmcPath = '/' + path.slice('/ipmi/'.length);
+		const serverName = resolveServer(event);
+		if (serverName) {
+			return { action: 'proxy', serverName, path: bmcPath + search };
+		}
+	}
+
+	// 5. Non-app path with resolved server
+	const serverName = resolveServer(event);
+	if (serverName) {
+		if (DEBUG) console.debug('[SW] Resolved request: %s -> server %s (mode: %s)', path, serverName, event.request.mode);
+
+		// For navigation requests not already under /ipmi/{name}/, redirect
+		// so the browser URL bar shows the correct prefixed path. This
+		// prevents the BMC's JS navigations (e.g., top.location = "/login.html")
+		// from losing the /ipmi/ prefix.
+		if (event.request.mode === 'navigate') {
+			return { action: 'redirect', serverName, path: '/ipmi/' + serverName + path + search };
+		}
+
+		return { action: 'proxy', serverName, path: path + search };
+	}
+
+	// 6. No server resolved -> passthrough (regular app content)
+	return { action: 'passthrough' };
 }
+
+self.addEventListener('fetch', (event) => {
+	const route = routeRequest(event);
+
+	switch (route.action) {
+		case 'proxy':
+			event.respondWith(proxyToBMC(event.request, route.serverName, route.path));
+			return;
+		case 'redirect':
+			event.respondWith(Response.redirect(route.path, 302));
+			return;
+		case 'passthrough':
+		default:
+			return;
+	}
+});
+
+// ---------------------------------------------------------------------------
+// BMC proxy
+// ---------------------------------------------------------------------------
 
 async function proxyToBMC(request, name, path) {
 	try {
@@ -317,6 +370,10 @@ async function proxyToBMC(request, name, path) {
 		});
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Auto-login injection
+// ---------------------------------------------------------------------------
 
 // Auto-login script for iDRAC8 login.html (fallback — normally bypassed by proxy).
 // Hides the form, fills dummy credentials (intercepted by proxy), and submits.
