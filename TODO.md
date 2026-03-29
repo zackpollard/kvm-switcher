@@ -75,7 +75,7 @@
 - [ ] E2E test integration (Playwright against test BMCs or mocks)
 
 ### Docker / Deployment
-- [ ] Multi-arch Docker image for the app itself (ARM + amd64)
+- [x] Multi-arch Docker image (ARM + amd64 via publish.yml with native runners)
 - [x] Clean up legacy JViewer Docker build targets from Makefile
 - [ ] Document production deployment (reverse proxy, TLS termination, env vars)
 - [ ] Helm chart or docker-compose production template
