@@ -169,7 +169,6 @@
 				<div class="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					{#each group.servers as server}
 						{@const st = statuses[server.name]}
-						{@const hasStats = st?.model || st?.power_state || st?.health || st?.temperature_c || st?.app_version || st?.image_version || st?.load_watts || st?.load_pct || st?.load_amps || st?.voltage || (st?.battery_pct != null && st.battery_pct > 0)}
 						<ServerCard>
 							{#snippet header()}
 								<div class="flex items-center justify-between gap-3">
@@ -187,8 +186,8 @@
 								</div>
 							{/snippet}
 
-							{#if hasStats}
-								{#snippet body()}
+							{#if st?.model || st?.power_state || st?.health || st?.temperature_c || st?.app_version || st?.image_version || st?.load_watts || st?.load_pct || st?.load_amps || st?.voltage || (st?.battery_pct != null && st.battery_pct > 0)}
+								<div class="-mx-5 -mt-3 border-t border-light-200 px-5 py-3">
 									<div class="space-y-1 text-sm">
 										{#if st?.model}
 											<p class="text-dark">{st.model}</p>
@@ -263,7 +262,7 @@
 											{/if}
 										{/if}
 									</div>
-								{/snippet}
+								</div>
 							{/if}
 
 							{#snippet footer()}

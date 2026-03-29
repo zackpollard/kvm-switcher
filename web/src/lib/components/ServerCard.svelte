@@ -1,9 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 
-	let { header, body, children, footer, class: className = '' }: {
+	let { header, children, footer, class: className = '' }: {
 		header?: Snippet;
-		body?: Snippet;
 		children?: Snippet;
 		footer?: Snippet;
 		class?: string;
@@ -14,12 +13,6 @@
 	{#if header}
 		<div class="px-5 py-4">
 			{@render header()}
-		</div>
-	{/if}
-
-	{#if body}
-		<div class="border-t border-light-200 px-5 py-3">
-			{@render body()}
 		</div>
 	{/if}
 
