@@ -1,6 +1,8 @@
 // Service Worker for IPMI BMC proxy — v3
 // Intercepts requests from BMC pages and rewrites them to /__bmc/{name}/...
 
+const DEBUG = false;
+
 const clientServerMap = new Map(); // clientId -> serverName
 const knownServers = new Set(); // server names confirmed via navigation
 const nanoKVMServers = new Set(); // server names that are NanoKVM devices
@@ -50,6 +52,7 @@ self.addEventListener('fetch', (event) => {
 	// subsequent requests (favicon, SW scope checks, etc.) aren't misrouted.
 	if (isAppRoute(path)) {
 		if (event.request.mode === 'navigate') {
+			if (DEBUG) console.debug('[SW] App-route navigation, clearing lastActiveServer (was %s): %s', lastActiveServer, path);
 			lastActiveServer = null;
 		}
 		// Exception: /api/* and /ws/* requests from NanoKVM pages need to be
@@ -58,6 +61,7 @@ self.addEventListener('fetch', (event) => {
 		if (path.startsWith('/api/') || path.startsWith('/ws/')) {
 			const clientName = event.clientId ? clientServerMap.get(event.clientId) : null;
 			if (clientName && nanoKVMServers.has(clientName)) {
+				if (DEBUG) console.debug('[SW] NanoKVM /api/ intercept: %s -> server %s', path, clientName);
 				event.respondWith(proxyToBMC(event.request, clientName, path + url.search));
 				return;
 			}
@@ -81,6 +85,7 @@ self.addEventListener('fetch', (event) => {
 			if (event.clientId) clientServerMap.set(event.clientId, name);
 			if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
 			lastActiveServer = name;
+			if (DEBUG) console.debug('[SW] /ipmi/ route: %s -> server %s (rest: %s)', path, name, rest);
 			event.respondWith(proxyToBMC(event.request, name, rest + url.search));
 			return;
 		}
@@ -100,6 +105,7 @@ self.addEventListener('fetch', (event) => {
 	let serverName = resolveServer(event);
 
 	if (serverName) {
+		if (DEBUG) console.debug('[SW] Resolved request: %s -> server %s (mode: %s)', path, serverName, event.request.mode);
 		// For navigation requests not already under /ipmi/{name}/, redirect
 		// so the browser URL bar shows the correct prefixed path. This
 		// prevents the BMC's JS navigations (e.g., top.location = "/login.html")
@@ -121,8 +127,14 @@ self.addEventListener('fetch', (event) => {
 // the resultingClientId is the NEW client that loads the page — we must map
 // it so subsequent AJAX from that page routes to the correct server.
 function trackClient(event, name) {
-	if (event.clientId) clientServerMap.set(event.clientId, name);
-	if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
+	if (event.clientId) {
+		if (DEBUG) console.debug('[SW] trackClient: mapping client %s -> server %s', event.clientId, name);
+		clientServerMap.set(event.clientId, name);
+	}
+	if (event.resultingClientId) {
+		if (DEBUG) console.debug('[SW] trackClient: mapping resultingClient %s -> server %s', event.resultingClientId, name);
+		clientServerMap.set(event.resultingClientId, name);
+	}
 }
 
 // Determine which BMC server a non-/ipmi/ request belongs to.
@@ -133,6 +145,7 @@ function resolveServer(event) {
 	if (clientId) {
 		const name = clientServerMap.get(clientId);
 		if (name) {
+			if (DEBUG) console.debug('[SW] resolveServer: clientServerMap hit, client %s -> server %s', clientId, name);
 			// Also map resultingClientId for navigations so the new page
 			// inherits the server mapping from the old page.
 			if (event.resultingClientId) clientServerMap.set(event.resultingClientId, name);
@@ -178,6 +191,7 @@ function resolveServer(event) {
 		if (path === '/' || path.startsWith('/kvm/')) {
 			return null;
 		}
+		if (DEBUG) console.debug('[SW] resolveServer: falling back to lastActiveServer %s for %s', lastActiveServer, path);
 		trackClient(event, lastActiveServer);
 		return lastActiveServer;
 	}
