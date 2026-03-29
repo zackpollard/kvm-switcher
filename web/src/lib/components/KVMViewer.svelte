@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 
 	let { wsUrl, container, ondisconnect, password }: { wsUrl: string; container: HTMLDivElement; ondisconnect?: () => void; password?: string } = $props();
 
@@ -7,6 +7,7 @@
 	let rfb: any = null;
 	let status = $state('Connecting...');
 	let connected = $state(false);
+	let ctrlAltDelHandler: (() => void) | null = null;
 
 	onMount(async () => {
 		const { default: RFB } = await import('@novnc/novnc');
@@ -47,20 +48,22 @@
 			status = `Connection failed: ${e instanceof Error ? e.message : 'Unknown error'}`;
 		}
 
-		const ctrlAltDelHandler = () => {
+		ctrlAltDelHandler = () => {
 			if (rfb) {
 				rfb.sendCtrlAltDel();
 			}
 		};
 		container?.addEventListener('send-ctrl-alt-del', ctrlAltDelHandler);
+	});
 
-		return () => {
+	onDestroy(() => {
+		if (ctrlAltDelHandler) {
 			container?.removeEventListener('send-ctrl-alt-del', ctrlAltDelHandler);
-			if (rfb) {
-				rfb.disconnect();
-				rfb = null;
-			}
-		};
+		}
+		if (rfb) {
+			rfb.disconnect();
+			rfb = null;
+		}
 	});
 </script>
 

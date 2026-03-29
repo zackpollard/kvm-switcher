@@ -40,17 +40,17 @@
 ## Code Quality
 
 ### Frontend Testing
-- [ ] Auth flow tests (OIDC login/logout, role-based access)
-- [ ] Session management tests (create, reconnect, timeout, disconnect)
+- [x] Auth flow tests (OIDC integration: 401, RBAC filtering, /auth/me)
+- [x] Session management tests (getSession, listSessions, keepAlive, delete, create, WebSocket URL)
 - [x] Error state tests (API error paths: power control, session conflicts, IPMI errors)
-- [ ] KVMViewer component tests
+- [x] KVMViewer component tests (10 tests: events, credentials, Ctrl+Alt+Del, desktop name)
 - [ ] Accessibility / responsive design tests
 
 ### Backend Testing
 - [ ] Integration tests for iKVM bridge (VNC handshake, frame delivery)
 - [x] VNC protocol rewriting tests (ServerInit rewrite, SetEncodings filter, CheckOrigin)
 - [x] Proxy response rewriting tests (header stripping, auto-login injection, gzip decompression)
-- [ ] Auth flow integration tests (full login -> session -> BMC proxy cycle)
+- [x] Auth flow integration tests (OIDC -> session -> RBAC with 5 sub-tests)
 
 ### API Documentation
 - [ ] OpenAPI/Swagger spec for all REST endpoints
