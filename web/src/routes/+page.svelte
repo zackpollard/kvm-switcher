@@ -138,7 +138,7 @@
 			size="small"
 			variant="outline"
 			color="secondary"
-			shape="semi-round"
+			shape="round"
 		>
 			Refresh
 		</Button>
@@ -279,7 +279,7 @@
 											size="small"
 											variant="outline"
 											color="secondary"
-											shape="semi-round"
+											shape="round"
 											loading={openingIPMI === server.name}
 										>
 											{#if openingIPMI === server.name}
@@ -295,7 +295,7 @@
 												size="small"
 												variant="filled"
 												color="primary"
-												shape="semi-round"
+												shape="round"
 												loading={connecting === server.name}
 											>
 												{#if connecting === server.name}

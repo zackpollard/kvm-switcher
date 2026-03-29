@@ -78,6 +78,7 @@
 			size="tiny"
 			variant="outline"
 			color={level === 'critical' ? 'danger' : 'warning'}
+			shape="round"
 		>
 			{keepingAlive ? 'Extending...' : 'Stay connected'}
 		</Button>
