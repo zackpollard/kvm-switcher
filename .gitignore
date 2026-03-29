@@ -1,6 +1,15 @@
-# Go
+# Go binaries
 kvm-switcher
+server
+ikvm-test
+vnc-client-test
 *.exe
+
+# Test artifacts
+tests/e2e/test-results/
+
+# Downloaded JNLP files
+*.jnlp
 
 # Node
 node_modules/
