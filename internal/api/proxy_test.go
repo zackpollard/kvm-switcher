@@ -67,13 +67,13 @@ func newTestBMCServer(t *testing.T, bmc *httptest.Server) *Server {
 		Servers: []models.ServerConfig{
 			{Name: "test-bmc", BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4},
 	}
 
 	// Clear cached proxy from previous tests
 	bmcProxies.Delete("test-bmc")
 
-	return newServerCore(cfg, &mockContainerManager{})
+	return newServerCore(cfg)
 }
 
 func TestHandleBMCProxy_BasicRequest(t *testing.T) {
@@ -117,9 +117,9 @@ func TestHandleBMCProxy_SubPath(t *testing.T) {
 func TestHandleBMCProxy_UnknownServer(t *testing.T) {
 	cfg := &models.AppConfig{
 		Servers:  []models.ServerConfig{},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4},
 	}
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	req := httptest.NewRequest("GET", "/__bmc/nonexistent/", nil)
 	w := httptest.NewRecorder()
@@ -311,11 +311,11 @@ func newTestDellServer(t *testing.T, bmc *httptest.Server, boardType string) *Se
 		Servers: []models.ServerConfig{
 			{Name: name, BMCIP: host, BMCPort: port, BoardType: boardType, Username: "root", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4},
 	}
 
 	bmcProxies.Delete(name)
-	return newServerCore(cfg, &mockContainerManager{})
+	return newServerCore(cfg)
 }
 
 func TestHandleBMCProxy_IDRAC8_XLanguageInjection(t *testing.T) {
@@ -619,11 +619,11 @@ func newTestNanoKVMServer(t *testing.T, bmc *httptest.Server) *Server {
 		Servers: []models.ServerConfig{
 			{Name: name, BMCIP: host, BMCPort: port, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4},
 	}
 
 	bmcProxies.Delete(name)
-	return newServerCore(cfg, &mockContainerManager{})
+	return newServerCore(cfg)
 }
 
 func TestHandleBMCProxy_NanoKVM_CredentialInjection(t *testing.T) {
@@ -750,11 +750,11 @@ func newTestAPCServer(t *testing.T, bmc *httptest.Server) *Server {
 		Servers: []models.ServerConfig{
 			{Name: name, BMCIP: host, BMCPort: port, BoardType: "apc_ups", Username: "apc", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4},
 	}
 
 	bmcProxies.Delete(name)
-	return newServerCore(cfg, &mockContainerManager{})
+	return newServerCore(cfg)
 }
 
 func TestHandleBMCProxy_APC_LoginBypass_Root(t *testing.T) {

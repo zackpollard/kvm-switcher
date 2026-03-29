@@ -73,11 +73,11 @@ func TestIntegration_MegaRAC_SessionThenProxy(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "INTEG_MEGARAC_PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// --- Step 1: CreateIPMISession ---
 	apiMux := http.NewServeMux()
@@ -218,11 +218,11 @@ func TestIntegration_IDRAC8_SessionThenProxy(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "dell_idrac8", Username: "root", CredentialEnv: "INTEG_IDRAC8_PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// --- Step 1: CreateIPMISession ---
 	apiMux := http.NewServeMux()
@@ -404,11 +404,11 @@ func TestIntegration_NanoKVM_SessionThenProxy(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "nanokvm", Username: "admin", CredentialEnv: "INTEG_NANOKVM_PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// --- Step 1: CreateIPMISession ---
 	apiMux := http.NewServeMux()
@@ -534,11 +534,11 @@ func TestIntegration_APC_SessionThenProxy(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "apc_ups", Username: "apc", CredentialEnv: "INTEG_APC_PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// --- Step 1: CreateIPMISession ---
 	apiMux := http.NewServeMux()
@@ -656,11 +656,11 @@ func TestIntegration_GzipDecompression(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	req := httptest.NewRequest("GET", "/__bmc/"+serverName+"/", nil)
 	w := httptest.NewRecorder()
@@ -709,11 +709,11 @@ func TestIntegration_HeaderRemoval(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	req := httptest.NewRequest("GET", "/__bmc/"+serverName+"/", nil)
 	w := httptest.NewRecorder()
@@ -753,11 +753,11 @@ func TestIntegration_BMCUnreachable_SessionCreation(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: "127.0.0.1", BMCPort: 1, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "INTEG_UNREACH_PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /api/ipmi-session/{name}", srv.CreateIPMISession)
@@ -794,11 +794,11 @@ func TestIntegration_BMCUnreachable_Proxy502(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: "127.0.0.1", BMCPort: 1, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	req := httptest.NewRequest("GET", "/__bmc/"+serverName+"/page", nil)
 	w := httptest.NewRecorder()
@@ -866,7 +866,7 @@ func TestIntegration_PollStatuses_WithMockBMCs(t *testing.T) {
 			{Name: megaracName, BMCIP: mHost, BMCPort: mPort, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
 			{Name: nanokvmName, BMCIP: nHost, BMCPort: nPort, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 
 	bmcProxies.Delete(megaracName)
@@ -876,7 +876,7 @@ func TestIntegration_PollStatuses_WithMockBMCs(t *testing.T) {
 		bmcProxies.Delete(nanokvmName)
 	})
 
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// Set up proxy entries with credentials
 	megaracEntry := getOrCreateProxy(&cfg.Servers[0], megaracName)
@@ -956,11 +956,11 @@ func TestIntegration_AutoLoginHeader_NoCreds(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// No credentials set — just proxy through
 	req := httptest.NewRequest("GET", "/__bmc/"+serverName+"/", nil)
@@ -1041,11 +1041,11 @@ func TestIntegration_IDRAC9_SessionThenProxy(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "dell_idrac9", Username: "root", CredentialEnv: "INTEG_IDRAC9_PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// --- Step 1: CreateIPMISession ---
 	apiMux := http.NewServeMux()
@@ -1335,11 +1335,11 @@ func TestIntegration_NanoKVMWebSocket_MissingToken(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: "127.0.0.1", BMCPort: 80, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// Send a regular HTTP request with NO cookie
 	req := httptest.NewRequest("GET", "/api/ws", nil)
@@ -1366,11 +1366,11 @@ func TestIntegration_NanoKVMWebSocket_InvalidToken(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: "127.0.0.1", BMCPort: 80, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// Create a session so credentials exist
 	entry := getOrCreateProxy(&cfg.Servers[0], serverName)
@@ -1417,11 +1417,11 @@ func TestIntegration_NanoKVMWebSocket_ValidToken(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "nanokvm", Username: "admin", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// Set up credentials with the real token
 	realToken := "valid-nano-token-01234567890"
@@ -1472,11 +1472,11 @@ func TestIntegration_APC_LocationRewrite_StripNMCToken(t *testing.T) {
 		Servers: []models.ServerConfig{
 			{Name: serverName, BMCIP: host, BMCPort: port, BoardType: "apc_ups", Username: "apc", CredentialEnv: "PASS"},
 		},
-		Settings: models.Settings{MaxConcurrentSessions: 4, Runtime: "docker"},
+		Settings: models.Settings{MaxConcurrentSessions: 4, },
 	}
 	bmcProxies.Delete(serverName)
 	t.Cleanup(func() { bmcProxies.Delete(serverName) })
-	srv := newServerCore(cfg, &mockContainerManager{})
+	srv := newServerCore(cfg)
 
 	// Set up credentials with nmc_path
 	entry := getOrCreateProxy(&cfg.Servers[0], serverName)

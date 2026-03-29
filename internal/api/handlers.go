@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/zackpollard/kvm-switcher/internal/auth"
 	"github.com/zackpollard/kvm-switcher/internal/config"
-	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
@@ -28,7 +26,6 @@ import (
 type Server struct {
 	Config      *models.AppConfig
 	Sessions    models.SessionStoreInterface
-	Container   containermgr.Manager
 	BMCCreds    map[string]*models.BMCCredEntry // session ID -> BMC creds for logout
 	bmcCredsMu  sync.Mutex
 	StatusCache *StatusCache
@@ -38,20 +35,19 @@ type Server struct {
 }
 
 // NewServer creates a new API server with an in-memory session store and starts background pollers.
-func NewServer(cfg *models.AppConfig, cm containermgr.Manager) *Server {
-	srv := newServerCore(cfg, cm)
+func NewServer(cfg *models.AppConfig) *Server {
+	srv := newServerCore(cfg)
 	StartSessionManager(cfg.Servers, srv.StatusCache)
 	StartStatusPoller(cfg.Servers, srv.StatusCache)
 	return srv
 }
 
 // NewServerWithStore creates a new API server with a custom session store and starts background pollers.
-func NewServerWithStore(cfg *models.AppConfig, cm containermgr.Manager, sessions models.SessionStoreInterface, auditDB models.AuditLogger) *Server {
+func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInterface, auditDB models.AuditLogger) *Server {
 	sc := NewStatusCache()
 	srv := &Server{
 		Config:      cfg,
 		Sessions:    sessions,
-		Container:   cm,
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
 		Bridges:     make(map[string]*ikvm.Bridge),
 		StatusCache: sc,
@@ -64,12 +60,11 @@ func NewServerWithStore(cfg *models.AppConfig, cm containermgr.Manager, sessions
 
 // newServerCore creates a Server without starting background goroutines.
 // Used by tests to avoid background pollers racing with test assertions.
-func newServerCore(cfg *models.AppConfig, cm containermgr.Manager) *Server {
+func newServerCore(cfg *models.AppConfig) *Server {
 	sc := NewStatusCache()
 	return &Server{
 		Config:      cfg,
 		Sessions:    models.NewSessionStore(),
-		Container:   cm,
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
 		Bridges:     make(map[string]*ikvm.Bridge),
 		StatusCache: sc,
@@ -216,10 +211,10 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 		return
 	}
 
-	// For native iKVM mode, use the session manager's existing web session
+	// For MegaRAC boards, use the session manager's existing web session
 	// to fetch a KVM token. This avoids creating a separate web session that
 	// the BMC might evict when session slots are full.
-	if s.Config.Settings.NativeIKVM && serverCfg.BoardType == "ami_megarac" {
+	if serverCfg.BoardType == "ami_megarac" {
 		megaAuth, ok := authenticator.(*auth.MegaRACAuthenticator)
 		if !ok {
 			session.Status = models.SessionError
@@ -255,7 +250,7 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 		}
 
 		session.ConnMode = models.KVMModeIKVM
-		session.IKVMArgs = connectInfo.ContainerArgs
+		session.IKVMArgs = connectInfo.IKVMArgs
 		s.startIKVMSession(session, connectInfo)
 		return
 	}
@@ -277,11 +272,10 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	session.ConnMode = connectInfo.Mode
 
 	switch connectInfo.Mode {
-	case models.KVMModeContainer:
-		s.startContainerSession(ctx, session, serverCfg, authenticator, creds, connectInfo)
 	case models.KVMModeWebSocket, models.KVMModeVNC:
 		s.startDirectSession(ctx, session, serverCfg, authenticator, creds, connectInfo)
 	case models.KVMModeIKVM:
+		session.IKVMArgs = connectInfo.IKVMArgs
 		s.startIKVMSession(session, connectInfo)
 	default:
 		session.Status = models.SessionError
@@ -290,64 +284,7 @@ func (s *Server) startSession(session *models.KVMSession, serverCfg *models.Serv
 	}
 }
 
-// startContainerSession launches a JViewer container (AMI MegaRAC flow).
-func (s *Server) startContainerSession(ctx context.Context, session *models.KVMSession, serverCfg *models.ServerConfig, authenticator auth.BMCAuthenticator, creds *models.BMCCredentials, connectInfo *models.KVMConnectInfo) {
-	if s.Container == nil {
-		log.Printf("Session %s: container runtime not available", session.ID)
-		session.Status = models.SessionError
-		session.Error = "container runtime not available (enable native_ikvm for MegaRAC)"
-		s.Sessions.Set(session)
-		return
-	}
-	log.Printf("Session %s: starting container for %s...", session.ID, serverCfg.Name)
-	wsPort, err := s.Container.StartContainer(ctx, session, connectInfo.ContainerArgs)
-	if err != nil {
-		log.Printf("Session %s: failed to start container: %v", session.ID, err)
-		session.Status = models.SessionError
-		session.Error = "failed to start KVM container"
-		s.Sessions.Set(session)
-		_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, creds)
-		return
-	}
-
-	session.WebSocketPort = wsPort
-	s.Sessions.Set(session)
-
-	// Wait for websockify to accept connections
-	log.Printf("Session %s: waiting for container websockify on port %d...", session.ID, wsPort)
-	wsURL := url.URL{
-		Scheme: "ws",
-		Host:   net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", wsPort)),
-		Path:   "/websockify",
-	}
-	probeDialer := websocket.Dialer{Subprotocols: []string{"binary"}}
-	ready := false
-	for i := 0; i < 30; i++ {
-		probeConn, _, err := probeDialer.Dial(wsURL.String(), nil)
-		if err == nil {
-			probeConn.Close()
-			ready = true
-			break
-		}
-		time.Sleep(time.Second)
-	}
-	if !ready {
-		log.Printf("Session %s: websockify never became reachable", session.ID)
-		session.Status = models.SessionError
-		session.Error = "KVM container started but websockify not reachable"
-		s.Sessions.Set(session)
-		_ = s.Container.StopContainer(ctx, session.ContainerID)
-		_ = authenticator.Logout(ctx, serverCfg.BMCIP, serverCfg.BMCPort, creds)
-		return
-	}
-
-	session.Status = models.SessionConnected
-	session.LastActivity = time.Now()
-	s.Sessions.Set(session)
-	log.Printf("Session %s: connected to %s on port %d", session.ID, serverCfg.Name, wsPort)
-}
-
-// startIKVMSession sets up a native iKVM session (no Docker container needed).
+// startIKVMSession sets up a native iKVM session.
 // The session is marked "connected" immediately since the actual BMC connection
 // happens on-demand when the WebSocket client connects. The WebSocket handler
 // authenticates fresh and establishes the IVTP tunnel.
@@ -389,14 +326,6 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
-	}
-
-	// Check if container is still running (only relevant for container-mode sessions)
-	if session.Status == models.SessionConnected && session.ContainerID != "" && session.ConnMode == models.KVMModeContainer {
-		if !s.Container.IsContainerRunning(r.Context(), session.ContainerID) {
-			session.Status = models.SessionDisconnected
-			s.Sessions.Set(session)
-		}
 	}
 
 	resp := sessionResponse{KVMSession: session}
@@ -443,14 +372,6 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	// Stop the Docker container
-	if session.ContainerID != "" {
-		log.Printf("Session %s: stopping container...", id)
-		if err := s.Container.StopContainer(ctx, session.ContainerID); err != nil {
-			log.Printf("Session %s: error stopping container: %v", id, err)
-		}
-	}
 
 	// Logout from BMC
 	s.bmcCredsMu.Lock()

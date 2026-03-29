@@ -12,22 +12,6 @@ import (
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
 
-// mockContainerManager implements container.Manager for testing.
-type mockContainerManager struct{}
-
-func (m *mockContainerManager) StartContainer(_ context.Context, _ *models.KVMSession, _ *models.JViewerArgs) (int, error) {
-	return 0, nil
-}
-func (m *mockContainerManager) StopContainer(_ context.Context, _ string) error { return nil }
-func (m *mockContainerManager) IsContainerRunning(_ context.Context, _ string) bool {
-	return true
-}
-func (m *mockContainerManager) GetContainerLogs(_ context.Context, _ string) (string, error) {
-	return "", nil
-}
-func (m *mockContainerManager) CleanupOrphans(_ context.Context) error { return nil }
-func (m *mockContainerManager) Close() error                           { return nil }
-
 func newTestConfig(oidcEnabled bool) *models.AppConfig {
 	cfg := &models.AppConfig{
 		Servers: []models.ServerConfig{
@@ -37,7 +21,6 @@ func newTestConfig(oidcEnabled bool) *models.AppConfig {
 		},
 		Settings: models.Settings{
 			MaxConcurrentSessions: 4,
-			Runtime:               "docker",
 		},
 	}
 	if oidcEnabled {
@@ -55,7 +38,7 @@ func newTestConfig(oidcEnabled bool) *models.AppConfig {
 }
 
 func TestListServers_NoOIDC(t *testing.T) {
-	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false))
 
 	req := httptest.NewRequest("GET", "/api/servers", nil)
 	w := httptest.NewRecorder()
@@ -75,7 +58,7 @@ func TestListServers_NoOIDC(t *testing.T) {
 }
 
 func TestListServers_OIDCAdmin(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	user := &models.UserInfo{Email: "admin@test.com", Roles: []string{"admin"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -93,7 +76,7 @@ func TestListServers_OIDCAdmin(t *testing.T) {
 }
 
 func TestListServers_OIDCOps(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -116,7 +99,7 @@ func TestListServers_OIDCOps(t *testing.T) {
 }
 
 func TestListServers_OIDCDev(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	user := &models.UserInfo{Email: "dev@test.com", Roles: []string{"dev"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -137,7 +120,7 @@ func TestListServers_OIDCDev(t *testing.T) {
 }
 
 func TestListServers_OIDCNoMatchingRole(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	user := &models.UserInfo{Email: "nobody@test.com", Roles: []string{"viewer"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -155,7 +138,7 @@ func TestListServers_OIDCNoMatchingRole(t *testing.T) {
 }
 
 func TestListServers_OIDCMultiRole(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	user := &models.UserInfo{Email: "multi@test.com", Roles: []string{"ops", "dev"}}
 	ctx := context.WithValue(context.Background(), kvmoidc.UserContextKey, user)
@@ -173,7 +156,7 @@ func TestListServers_OIDCMultiRole(t *testing.T) {
 }
 
 func TestCreateSession_OIDCForbidden(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	body := `{"server_name":"server-3"}`
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
@@ -197,7 +180,7 @@ func TestCreateSession_OIDCForbidden(t *testing.T) {
 }
 
 func TestCreateSession_OIDCAllowed(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	body := `{"server_name":"server-1"}`
 	user := &models.UserInfo{Email: "ops@test.com", Roles: []string{"ops"}}
@@ -214,7 +197,7 @@ func TestCreateSession_OIDCAllowed(t *testing.T) {
 }
 
 func TestCreateSession_NoOIDC(t *testing.T) {
-	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false))
 
 	body := `{"server_name":"server-1"}`
 	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body))
@@ -228,7 +211,7 @@ func TestCreateSession_NoOIDC(t *testing.T) {
 }
 
 func TestCreateSession_ServerNotFound(t *testing.T) {
-	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false))
 
 	body := `{"server_name":"nonexistent"}`
 	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body))
@@ -242,7 +225,7 @@ func TestCreateSession_ServerNotFound(t *testing.T) {
 }
 
 func TestCreateSession_InvalidBody(t *testing.T) {
-	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false))
 
 	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -255,7 +238,7 @@ func TestCreateSession_InvalidBody(t *testing.T) {
 }
 
 func TestListServers_ActiveSessionFlag(t *testing.T) {
-	srv := newServerCore(newTestConfig(false), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(false))
 
 	// Add an active session for server-1
 	srv.Sessions.Set(&models.KVMSession{
@@ -284,7 +267,7 @@ func TestListServers_ActiveSessionFlag(t *testing.T) {
 }
 
 func TestListServers_EmptyArrayNotNull(t *testing.T) {
-	srv := newServerCore(newTestConfig(true), &mockContainerManager{})
+	srv := newServerCore(newTestConfig(true))
 
 	// User with no matching roles
 	user := &models.UserInfo{Email: "nobody@test.com", Roles: []string{"viewer"}}

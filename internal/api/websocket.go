@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -54,50 +53,8 @@ func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 	case models.KVMModeIKVM:
 		s.proxyIKVM(w, r, session)
 	default:
-		// Container mode (original flow)
-		s.proxyContainer(w, r, session)
+		http.Error(w, "unsupported KVM mode", http.StatusBadRequest)
 	}
-}
-
-// proxyContainer proxies to a local container's websockify (original AMI MegaRAC flow).
-func (s *Server) proxyContainer(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
-	containerURL := url.URL{
-		Scheme: "ws",
-		Host:   net.JoinHostPort("127.0.0.1", itoa(session.WebSocketPort)),
-		Path:   "/websockify",
-	}
-
-	log.Printf("Session %s: proxying WebSocket to container %s", session.ID, containerURL.String())
-
-	dialer := websocket.Dialer{
-		Subprotocols: []string{"binary"},
-	}
-	var backendConn *websocket.Conn
-	var err error
-	for i := 0; i < 3; i++ {
-		backendConn, _, err = dialer.Dial(containerURL.String(), nil)
-		if err == nil {
-			break
-		}
-		log.Printf("Session %s: waiting for container websockify (attempt %d)...", session.ID, i+1)
-		time.Sleep(time.Second)
-	}
-	if err != nil {
-		log.Printf("Session %s: failed to connect to container websockify: %v", session.ID, err)
-		http.Error(w, "failed to connect to KVM container", http.StatusBadGateway)
-		return
-	}
-	defer backendConn.Close()
-
-	clientConn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
-		return
-	}
-	defer clientConn.Close()
-
-	log.Printf("Session %s: WebSocket proxy established (container)", session.ID)
-	bidirectionalWSProxy(session.ID, clientConn, backendConn)
 }
 
 // proxyWSS proxies browser WebSocket to a remote WSS endpoint (iDRAC9 HTML5 KVM).
@@ -428,9 +385,8 @@ func rewriteVNCServerInit(sessionID string, data []byte) []byte {
 }
 
 // proxyIKVM bridges a browser WebSocket to a BMC using the native IVTP protocol.
-// This replaces the Docker container approach for AMI MegaRAC boards -- no JViewer,
-// no Xvfb, no x11vnc. The Go process speaks the BMC's IVTP protocol directly and
-// translates it to VNC/RFB for noVNC.
+// The Go process speaks the BMC's IVTP protocol directly and translates it to
+// VNC/RFB for noVNC.
 //
 // The bridge runs independently of WebSocket clients. On the first WebSocket
 // connection it creates and starts the bridge (BMC connection, IVTP read loop,

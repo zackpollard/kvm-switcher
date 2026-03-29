@@ -57,10 +57,10 @@ func main() {
 	log.Printf("  KVMToken: %s", creds.KVMToken)
 	log.Printf("  WebCookie: %s", creds.WebCookie)
 
-	if connectInfo.ContainerArgs == nil {
-		log.Fatal("No JViewer args in connect info")
+	if connectInfo.IKVMArgs == nil {
+		log.Fatal("No iKVM args in connect info")
 	}
-	args := connectInfo.ContainerArgs
+	args := connectInfo.IKVMArgs
 
 	// Connect using native IVTP protocol
 	webSecPort := 443

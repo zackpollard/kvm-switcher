@@ -56,8 +56,8 @@ func (m *MegaRACAuthenticator) FetchKVMToken(ctx context.Context, host string, p
 	existingCreds.KVMToken = args.KVMToken
 	existingCreds.WebCookie = args.WebCookie
 	return &models.KVMConnectInfo{
-		Mode:          models.KVMModeContainer,
-		ContainerArgs: args,
+		Mode:     models.KVMModeIKVM,
+		IKVMArgs: args,
 	}, nil
 }
 
@@ -86,8 +86,8 @@ func (m *MegaRACAuthenticator) Authenticate(ctx context.Context, host string, po
 	}
 
 	connectInfo := &models.KVMConnectInfo{
-		Mode:          models.KVMModeContainer, // Default; overridden to KVMModeIKVM by server if native_ikvm is set
-		ContainerArgs: args,
+		Mode:     models.KVMModeIKVM,
+		IKVMArgs: args,
 	}
 
 	return creds, connectInfo, nil

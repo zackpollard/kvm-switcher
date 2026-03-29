@@ -14,9 +14,6 @@ import (
 	_ "github.com/zackpollard/kvm-switcher/internal/auth"   // Register authenticators
 	_ "github.com/zackpollard/kvm-switcher/internal/boards" // Register board handlers
 	"github.com/zackpollard/kvm-switcher/internal/config"
-	containermgr "github.com/zackpollard/kvm-switcher/internal/container"
-	dockermgr "github.com/zackpollard/kvm-switcher/internal/docker"
-	k8smgr "github.com/zackpollard/kvm-switcher/internal/kubernetes"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
@@ -39,38 +36,6 @@ func main() {
 	}
 	log.Printf("Loaded %d server(s) from config", len(cfg.Servers))
 
-	// Initialize container manager based on runtime.
-	// When native_ikvm is enabled, Docker/K8s is optional since MegaRAC boards
-	// use the native IVTP protocol instead of JViewer containers.
-	var cm containermgr.Manager
-	switch cfg.Settings.Runtime {
-	case "kubernetes":
-		log.Println("Using Kubernetes runtime")
-		cm, err = k8smgr.NewManager(cfg.Settings.ContainerImage, cfg.Settings.KubeNamespace, cfg.Settings.KubeConfig)
-	case "docker":
-		log.Println("Using Docker runtime")
-		cm, err = dockermgr.NewManager(cfg.Settings.ContainerImage)
-	default:
-		if !cfg.Settings.NativeIKVM {
-			log.Fatalf("Unknown runtime: %s", cfg.Settings.Runtime)
-		}
-	}
-	if err != nil {
-		if cfg.Settings.NativeIKVM {
-			log.Printf("Warning: container runtime unavailable (%v); MegaRAC boards will use native iKVM", err)
-			cm = nil // Ensure cm is nil, not a nil-wrapped interface
-		} else {
-			log.Fatalf("Failed to initialize container runtime: %v", err)
-		}
-	}
-	if cm != nil {
-		defer cm.Close()
-		// Clean up any orphaned containers from previous runs
-		if err := cm.CleanupOrphans(context.Background()); err != nil {
-			log.Printf("Warning: failed to cleanup orphans: %v", err)
-		}
-	}
-
 	// Open SQLite database for audit logging and persistent sessions
 	db, err := store.Open(cfg.Settings.DBPath)
 	if err != nil {
@@ -92,7 +57,7 @@ func main() {
 		log.Println("Audit logging enabled")
 	}
 
-	srv := api.NewServerWithStore(cfg, cm, sessionStore, auditLogger)
+	srv := api.NewServerWithStore(cfg, sessionStore, auditLogger)
 
 	// Set up OIDC provider if enabled
 	var oidcProvider *kvmoidc.Provider
@@ -237,14 +202,10 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Stop active sessions (skip disconnected/error sessions whose containers are already gone)
+	// Stop active iKVM bridges
 	for _, session := range srv.Sessions.List() {
-		if session.ContainerID != "" && session.Status != models.SessionDisconnected && session.Status != models.SessionError {
-			log.Printf("Stopping session %s container...", session.ID)
-			if err := cm.StopContainer(ctx, session.ContainerID); err != nil {
-				log.Printf("Warning: failed to clean up session %s: %v", session.ID, err)
-			}
-			session.ContainerID = ""
+		if session.Status == models.SessionConnected || session.Status == models.SessionStarting {
+			srv.StopIKVMBridge(session.ID)
 			session.Status = models.SessionDisconnected
 			srv.Sessions.Set(session)
 		}
@@ -289,11 +250,7 @@ func sessionCleanup(srv *api.Server, cfg *models.Settings) {
 		for _, session := range srv.Sessions.List() {
 			if session.Status == models.SessionConnected && session.LastActivity.Before(threshold) {
 				log.Printf("Session %s: idle timeout, cleaning up", session.ID)
-				if session.ContainerID != "" {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					_ = srv.Container.StopContainer(ctx, session.ContainerID)
-					cancel()
-				}
+				srv.StopIKVMBridge(session.ID)
 				session.Status = models.SessionDisconnected
 				srv.Sessions.Set(session)
 			}

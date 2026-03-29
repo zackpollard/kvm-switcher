@@ -1,6 +1,6 @@
 servers:
   # AMI MegaRAC BMC (e.g. ASRock Rack servers)
-  # KVM: Container-based (JViewer + noVNC)
+  # KVM: Native iKVM protocol (IVTP → VNC/RFB for noVNC)
   # IPMI: Web proxy with auto-login via cookie injection
   - name: "server-1"
     bmc_ip: "10.10.11.251"
@@ -55,18 +55,6 @@ servers:
     credential_env: "APC_PASSWORD"
 
 settings:
-  # Container runtime: "docker" or "kubernetes"
-  runtime: "docker"
-
-  # Container image for KVM sessions (AMI MegaRAC only)
-  container_image: "ghcr.io/zackpollard/jviewer:latest"
-  # For local development builds:
-  # container_image: "kvm-switcher/jviewer:latest"
-
-  # Kubernetes settings (only used when runtime is "kubernetes")
-  # kube_namespace: "kvm-switcher"    # namespace for KVM pods (must exist)
-  # kube_config: ""                   # path to kubeconfig; leave empty for in-cluster
-
   max_concurrent_sessions: 4
   session_timeout_minutes: 60
   idle_timeout_minutes: 30

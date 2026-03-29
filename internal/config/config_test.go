@@ -36,9 +36,6 @@ servers:
 		t.Errorf("servers = %d, want 1", len(cfg.Servers))
 	}
 	// Check defaults
-	if cfg.Settings.Runtime != "docker" {
-		t.Errorf("runtime = %q, want docker", cfg.Settings.Runtime)
-	}
 	if cfg.Settings.MaxConcurrentSessions != 4 {
 		t.Errorf("max_concurrent_sessions = %d, want 4", cfg.Settings.MaxConcurrentSessions)
 	}
@@ -150,26 +147,6 @@ servers:
 				t.Errorf("error = %q, want to contain %q", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-func TestLoad_InvalidRuntime(t *testing.T) {
-	path := writeTestConfig(t, `
-servers:
-  - name: "srv1"
-    bmc_ip: "10.0.0.1"
-    board_type: "ami_megarac"
-    username: "admin"
-    credential_env: "BMC_PASS"
-settings:
-  runtime: "podman"
-`)
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("expected error for invalid runtime")
-	}
-	if !strings.Contains(err.Error(), "unknown runtime") {
-		t.Errorf("error = %q, want unknown runtime error", err)
 	}
 }
 

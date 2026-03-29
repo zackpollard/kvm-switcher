@@ -30,8 +30,8 @@ func NewSQLiteSessionStore(db *DB) (*SQLiteSessionStore, error) {
 	}
 
 	// Load existing sessions from DB
-	rows, err := db.Query(`SELECT id, server_name, bmc_ip, status, COALESCE(container_id,''),
-		COALESCE(websocket_port,0), COALESCE(conn_mode,''), COALESCE(kvm_target,''),
+	rows, err := db.Query(`SELECT id, server_name, bmc_ip, status,
+		COALESCE(conn_mode,''), COALESCE(kvm_target,''),
 		COALESCE(kvm_password,''), created_at, last_activity, COALESCE(error,'')
 		FROM kvm_sessions`)
 	if err != nil {
@@ -43,7 +43,7 @@ func NewSQLiteSessionStore(db *DB) (*SQLiteSessionStore, error) {
 		var sess models.KVMSession
 		var status, connMode, createdAt, lastActivity string
 		if err := rows.Scan(&sess.ID, &sess.ServerName, &sess.BMCIP, &status,
-			&sess.ContainerID, &sess.WebSocketPort, &connMode,
+			&connMode,
 			&sess.KVMTarget, &sess.KVMPassword, &createdAt, &lastActivity, &sess.Error); err != nil {
 			return nil, err
 		}
@@ -58,12 +58,11 @@ func NewSQLiteSessionStore(db *DB) (*SQLiteSessionStore, error) {
 	}
 
 	// Mark stale "starting" or "connected" sessions as "disconnected"
-	// and clear their ContainerIDs (containers are gone after a restart).
+	// (transient sessions cannot survive a restart).
 	count := 0
 	for _, sess := range s.cache {
 		if sess.Status == models.SessionStarting || sess.Status == models.SessionConnected {
 			sess.Status = models.SessionDisconnected
-			sess.ContainerID = ""
 			s.persistSession(sess)
 			count++
 		}
@@ -123,15 +122,14 @@ func (s *SQLiteSessionStore) FindByServer(serverName string) (*models.KVMSession
 
 func (s *SQLiteSessionStore) persistSession(sess *models.KVMSession) {
 	_, err := s.db.Exec(
-		`INSERT INTO kvm_sessions (id, server_name, bmc_ip, status, container_id, websocket_port, conn_mode, kvm_target, kvm_password, created_at, last_activity, error)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO kvm_sessions (id, server_name, bmc_ip, status, conn_mode, kvm_target, kvm_password, created_at, last_activity, error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
-		   status=excluded.status, container_id=excluded.container_id,
-		   websocket_port=excluded.websocket_port, conn_mode=excluded.conn_mode,
+		   status=excluded.status, conn_mode=excluded.conn_mode,
 		   kvm_target=excluded.kvm_target, kvm_password=excluded.kvm_password,
 		   last_activity=excluded.last_activity, error=excluded.error`,
 		sess.ID, sess.ServerName, sess.BMCIP, string(sess.Status),
-		sess.ContainerID, sess.WebSocketPort, string(sess.ConnMode),
+		string(sess.ConnMode),
 		sess.KVMTarget, sess.KVMPassword,
 		sess.CreatedAt.Format(timeFormat), sess.LastActivity.Format(timeFormat),
 		sess.Error,
