@@ -166,7 +166,7 @@
 	<!-- Toolbar -->
 	<div class="flex items-center justify-between border-b border-light-200 bg-light-50 px-4 py-2" role="toolbar" aria-label="KVM controls">
 		<div class="flex items-center gap-3">
-			<Button class="!rounded-xl" href="/" size="tiny" variant="ghost" color="secondary">&larr; Back</Button>
+			<Button style="border-radius: 0.75rem" href="/" size="tiny" variant="ghost" color="secondary">&larr; Back</Button>
 			{#if session}
 				<span class="text-sm font-medium text-dark">{session.server_name}</span>
 				<span class="font-mono text-xs text-muted">{session.bmc_ip}</span>
@@ -195,13 +195,12 @@
 		</div>
 
 		<div class="flex items-center gap-1">
-			<Button class="!rounded-xl" onclick={sendCtrlAltDel} size="tiny" variant="ghost" color="secondary">
+			<Button style="border-radius: 0.75rem" onclick={sendCtrlAltDel} size="tiny" variant="ghost" color="secondary">
 				Ctrl+Alt+Del
 			</Button>
 			{#if isIKVM}
 				<div class="relative">
-					<Button class="!rounded-xl"
-						onclick={() => { showPowerMenu = !showPowerMenu; showMouseMenu = false; showKbdMenu = false; }}
+					<Button 						onclick={() => { showPowerMenu = !showPowerMenu; showMouseMenu = false; showKbdMenu = false; }}
 						size="tiny"
 						variant="ghost"
 						color="secondary"
@@ -222,8 +221,7 @@
 						</div>
 					{/if}
 				</div>
-				<Button class="!rounded-xl"
-					onclick={toggleDisplayLock}
+				<Button 					onclick={toggleDisplayLock}
 					size="tiny"
 					variant="ghost"
 					color="secondary"
@@ -231,8 +229,7 @@
 				>
 					Lock Display
 				</Button>
-				<Button class="!rounded-xl"
-					onclick={resetVideo}
+				<Button 					onclick={resetVideo}
 					size="tiny"
 					variant="ghost"
 					color="secondary"
@@ -241,8 +238,7 @@
 					Reset Video
 				</Button>
 				<div class="relative">
-					<Button class="!rounded-xl"
-						onclick={() => { showMouseMenu = !showMouseMenu; showKbdMenu = false; showPowerMenu = false; }}
+					<Button 						onclick={() => { showMouseMenu = !showMouseMenu; showKbdMenu = false; showPowerMenu = false; }}
 						size="tiny"
 						variant="ghost"
 						color="secondary"
@@ -259,8 +255,7 @@
 					{/if}
 				</div>
 				<div class="relative">
-					<Button class="!rounded-xl"
-						onclick={() => { showKbdMenu = !showKbdMenu; showMouseMenu = false; showPowerMenu = false; }}
+					<Button 						onclick={() => { showKbdMenu = !showKbdMenu; showMouseMenu = false; showPowerMenu = false; }}
 						size="tiny"
 						variant="ghost"
 						color="secondary"
@@ -280,10 +275,10 @@
 					{/if}
 				</div>
 			{/if}
-			<Button class="!rounded-xl" onclick={toggleFullscreen} size="tiny" variant="ghost" color="secondary">
+			<Button style="border-radius: 0.75rem" onclick={toggleFullscreen} size="tiny" variant="ghost" color="secondary">
 				{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
 			</Button>
-			<Button class="!rounded-xl" onclick={disconnect} size="tiny" variant="outline" color="danger">
+			<Button style="border-radius: 0.75rem" onclick={disconnect} size="tiny" variant="outline" color="danger">
 				Disconnect
 			</Button>
 		</div>
@@ -303,8 +298,7 @@
 			<div class="flex h-full items-center justify-center" role="alert">
 				<div class="text-center">
 					<Alert color="danger" title={error} />
-					<Button class="!rounded-xl"
-						onclick={() => goto('/')}
+					<Button 						onclick={() => goto('/')}
 						size="small"
 						variant="outline"
 						color="secondary"
@@ -318,7 +312,7 @@
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
 					<p class="text-muted">Connection lost</p>
-					<Button class="!rounded-xl" onclick={reconnect} size="small" variant="filled" color="primary" class="mt-4">
+					<Button style="border-radius: 0.75rem" onclick={reconnect} size="small" variant="filled" color="primary" class="mt-4">
 						Reconnect
 					</Button>
 				</div>
@@ -336,8 +330,7 @@
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
 					<p class="text-muted">Session disconnected</p>
-					<Button class="!rounded-xl"
-						onclick={() => goto('/')}
+					<Button 						onclick={() => goto('/')}
 						size="small"
 						variant="outline"
 						color="secondary"

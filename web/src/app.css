@@ -1,1 +1,11 @@
 @import '@immich/ui/theme/default.css';
+
+/* @immich/ui's semi-round shape doesn't visibly override the base
+   rounded-md because tailwind-merge deduplicates the classes. Override
+   all button and anchor elements to use 12px border-radius for a
+   visible semi-round appearance. Does not affect rounded-full (pill)
+   or rounded-none (square) elements. */
+button:not([class*="rounded-full"]):not([class*="rounded-none"]),
+a[role]:not([class*="rounded-full"]):not([class*="rounded-none"]) {
+  border-radius: 0.75rem !important;
+}

@@ -58,8 +58,7 @@
 							size="small"
 							variant="ghost"
 							color="secondary"
-							class="!rounded-xl"
-						>
+													>
 							Logout
 						</Button>
 					{/if}
