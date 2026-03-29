@@ -1,4 +1,4 @@
-.PHONY: all build build-frontend build-backend build-docker \
+.PHONY: all build build-frontend build-backend \
        run dev dev-backend dev-frontend dev-stack dev-stack-down \
        test test-backend test-frontend test-e2e clean help
 
@@ -14,9 +14,6 @@ build-frontend: ## Build the SvelteKit frontend
 build-backend: ## Build the Go backend binary
 	go build -o kvm-switcher ./cmd/server/
 
-build-docker: ## Build the JViewer Docker image (linux/amd64)
-	docker buildx build --platform linux/amd64 --load -t kvm-switcher/jviewer:latest docker/jviewer/
-
 # ── Run ──────────────────────────────────────────────────────────────
 
 run: build ## Build and run the server
@@ -24,7 +21,7 @@ run: build ## Build and run the server
 
 # ── Development ──────────────────────────────────────────────────────
 
-dev: build-docker dev-stack ## Full dev: build docker, start observability stack, run backend with metrics
+dev: dev-stack ## Full dev: start observability stack, run backend with metrics
 	KVM_METRICS_ENABLED=true go run ./cmd/server/ -config configs/servers.yaml -web web/build
 
 dev-backend: ## Run the Go backend (no metrics stack)

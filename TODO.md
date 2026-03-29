@@ -76,6 +76,6 @@
 
 ### Docker / Deployment
 - [ ] Multi-arch Docker image for the app itself (ARM + amd64)
-- [ ] Clean up legacy JViewer Docker build targets from Makefile
+- [x] Clean up legacy JViewer Docker build targets from Makefile
 - [ ] Document production deployment (reverse proxy, TLS termination, env vars)
 - [ ] Helm chart or docker-compose production template
