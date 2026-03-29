@@ -154,7 +154,7 @@
 			<span class="ml-3 text-muted">Loading...</span>
 		</div>
 	{:else if servers.length === 0}
-		<Card color="secondary">
+		<Card class="bg-light-50 border border-light-200">
 			<CardBody>
 				<div class="py-10 text-center">
 					<p class="text-muted">No devices configured.</p>
@@ -169,18 +169,18 @@
 				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					{#each group.servers as server}
 						{@const st = statuses[server.name]}
-						<Card color="secondary" class="transition-colors hover:border-light-400">
+						<Card class="bg-light-50 border border-light-200 transition-colors hover:border-light-400">
 							<CardHeader>
 								<div class="flex items-start justify-between">
 									<div class="flex items-center gap-2">
 										{#if st}
-											<span class="h-2.5 w-2.5 rounded-full {st.online ? 'bg-success' : 'bg-danger'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
+											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full {st.online ? 'bg-success-500' : 'bg-danger-500'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
 										{:else}
-											<span class="h-2.5 w-2.5 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
+											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
 										{/if}
 										<h3 class="text-lg font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
 									</div>
-									<Badge size="tiny" color="secondary" shape="round">
+									<Badge size="tiny" shape="round" class="!bg-light-200 !text-dark">
 										{boardLabel(server.board_type)}
 									</Badge>
 								</div>

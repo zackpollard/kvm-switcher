@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { fetchAuthStatus, type AuthStatus } from '$lib/api';
-	import { Button, ThemeSwitcher, initializeTheme } from '@immich/ui';
+	import { Button, ThemeSwitcher, TooltipProvider, initializeTheme } from '@immich/ui';
 
 	let { children } = $props();
 	let auth: AuthStatus | null = $state(null);
@@ -34,8 +34,9 @@
 	});
 </script>
 
+<TooltipProvider>
 <div class="min-h-screen bg-light text-dark">
-	<nav class="border-b border-light-300 bg-light-50">
+	<nav class="border-b border-light-200 bg-light-50">
 		<div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
 			<div class="flex h-14 items-center justify-between">
 				<a href="/" class="flex items-center gap-2 text-lg font-semibold text-dark">
@@ -70,3 +71,4 @@
 		{@render children()}
 	</main>
 </div>
+</TooltipProvider>
