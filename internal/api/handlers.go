@@ -16,6 +16,7 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/auth"
 	"github.com/zackpollard/kvm-switcher/internal/config"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
+	vnc "github.com/zackpollard/kvm-switcher/internal/vnc"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 
@@ -30,8 +31,10 @@ type Server struct {
 	bmcCredsMu  sync.Mutex
 	StatusCache *StatusCache
 	AuditDB     models.AuditLogger // optional audit logging backend
-	Bridges     map[string]*ikvm.Bridge // active iKVM bridges by session ID
-	bridgesMu   sync.Mutex
+	Bridges      map[string]*ikvm.Bridge        // active iKVM bridges by session ID
+	bridgesMu    sync.Mutex
+	VNCBridges   map[string]*vnc.Bridge         // active VNC bridges by session ID
+	vncConnsMu   sync.Mutex
 }
 
 // NewServer creates a new API server with an in-memory session store and starts background pollers.
@@ -49,7 +52,8 @@ func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInter
 		Config:      cfg,
 		Sessions:    sessions,
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
-		Bridges:     make(map[string]*ikvm.Bridge),
+		Bridges:  make(map[string]*ikvm.Bridge),
+		VNCBridges: make(map[string]*vnc.Bridge),
 		StatusCache: sc,
 		AuditDB:     auditDB,
 	}
@@ -66,7 +70,8 @@ func newServerCore(cfg *models.AppConfig) *Server {
 		Config:      cfg,
 		Sessions:    models.NewSessionStore(),
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
-		Bridges:     make(map[string]*ikvm.Bridge),
+		Bridges:  make(map[string]*ikvm.Bridge),
+		VNCBridges: make(map[string]*vnc.Bridge),
 		StatusCache: sc,
 	}
 }
@@ -401,8 +406,9 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stop any running iKVM bridge for this session
+	// Stop any running bridges for this session
 	s.StopIKVMBridge(id)
+	s.StopVNCBridge(id)
 
 	session.Status = models.SessionDisconnected
 	s.Sessions.Set(session)

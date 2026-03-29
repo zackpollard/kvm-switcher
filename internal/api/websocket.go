@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	vncbridge "github.com/zackpollard/kvm-switcher/internal/vnc"
 )
 
 var upgrader = websocket.Upgrader{
@@ -106,18 +107,8 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 // to trigger noVNC's 8bpp mode), then switches to raw bidirectional proxying
 // with SetEncodings filtering for iDRAC8 compatibility.
 func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
-	log.Printf("Session %s: proxying WebSocket to VNC %s", session.ID, session.KVMTarget)
+	log.Printf("Session %s: VNC connect (bridge running=%v)", session.ID, s.vncBridgeRunning(session.ID))
 
-	// Connect to VNC server via raw TCP
-	tcpConn, err := net.DialTimeout("tcp", session.KVMTarget, 10*time.Second)
-	if err != nil {
-		log.Printf("Session %s: failed to connect to VNC %s: %v", session.ID, session.KVMTarget, err)
-		http.Error(w, "failed to connect to VNC", http.StatusBadGateway)
-		return
-	}
-	defer tcpConn.Close()
-
-	// Upgrade browser connection to WebSocket
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
@@ -125,59 +116,51 @@ func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *model
 	}
 	defer clientConn.Close()
 
-	log.Printf("Session %s: WebSocket↔VNC bridge established", session.ID)
-
-	// Phase 1: Handle VNC handshake with exact message parsing.
-	// Uses io.ReadFull for precise byte reads instead of counting TCP reads
-	// (which don't align to VNC message boundaries).
-	if err := vncHandshake(session.ID, clientConn, tcpConn); err != nil {
-		log.Printf("Session %s: VNC handshake failed: %v", session.ID, err)
+	bridge, err := s.ensureVNCBridge(session)
+	if err != nil {
+		log.Printf("Session %s: VNC bridge failed: %v", session.ID, err)
 		return
 	}
 
-	// Phase 2: Post-handshake bidirectional proxy.
-	errCh := make(chan error, 2)
-
-	// Browser WS → VNC TCP (with SetEncodings rewrite for iDRAC8)
-	go func() {
-		for {
-			_, data, err := clientConn.ReadMessage()
-			if err != nil {
-				errCh <- err
-				return
-			}
-			data = rewriteVNCClientMessage(session.ID, data)
-			if data == nil {
-				continue
-			}
-			if _, err := tcpConn.Write(data); err != nil {
-				errCh <- err
-				return
-			}
-		}
-	}()
-
-	// VNC TCP → Browser WS (pass-through after handshake)
-	go func() {
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := tcpConn.Read(buf)
-			if err != nil {
-				errCh <- err
-				return
-			}
-			if err := clientConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-				errCh <- err
-				return
-			}
-		}
-	}()
-
-	err = <-errCh
-	if err != nil && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-		log.Printf("Session %s: VNC proxy error: %v", session.ID, err)
+	if err := bridge.ServeWebSocket(clientConn); err != nil {
+		log.Printf("Session %s: VNC error: %v", session.ID, err)
 	}
-	log.Printf("Session %s: VNC proxy closed", session.ID)
+	log.Printf("Session %s: VNC disconnected", session.ID)
+}
+
+func (s *Server) ensureVNCBridge(session *models.KVMSession) (*vncbridge.Bridge, error) {
+	s.vncConnsMu.Lock()
+	bridge := s.VNCBridges[session.ID]
+	if bridge != nil && bridge.Running() {
+		s.vncConnsMu.Unlock()
+		return bridge, nil
+	}
+	s.vncConnsMu.Unlock()
+
+	bridge = vncbridge.NewBridge(session.KVMTarget, session.KVMPassword)
+	if err := bridge.Start(); err != nil {
+		return nil, err
+	}
+
+	s.vncConnsMu.Lock()
+	s.VNCBridges[session.ID] = bridge
+	s.vncConnsMu.Unlock()
+	return bridge, nil
+}
+
+func (s *Server) StopVNCBridge(sessionID string) {
+	s.vncConnsMu.Lock()
+	bridge := s.VNCBridges[sessionID]
+	delete(s.VNCBridges, sessionID)
+	s.vncConnsMu.Unlock()
+	if bridge != nil { bridge.Stop() }
+}
+
+func (s *Server) vncBridgeRunning(sessionID string) bool {
+	s.vncConnsMu.Lock()
+	defer s.vncConnsMu.Unlock()
+	b := s.VNCBridges[sessionID]
+	return b != nil && b.Running()
 }
 
 // vncHandshake performs the VNC RFB handshake between the browser (via WebSocket)
