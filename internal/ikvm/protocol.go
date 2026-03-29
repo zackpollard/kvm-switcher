@@ -5,6 +5,12 @@ import (
 	"fmt"
 )
 
+// Logger is the interface used for diagnostic logging within the ikvm package.
+// Defaults to log.Default() if not set.
+type Logger interface {
+	Printf(format string, v ...any)
+}
+
 // IVTP (iKVM Video Transfer Protocol) packet header.
 // All fields are little-endian, 8 bytes total.
 type IVTPHeader struct {
@@ -51,6 +57,27 @@ const (
 	IVTPPowerControlResp        = 36
 	IVTPConfServiceStatus       = 37
 	IVTPGetActiveClients        = 39
+	IVTPGetUserMacro            = 40
+	IVTPIPMIRequestPkt          = 48
+	IVTPSetNextMaster           = 50
+	IVTPDisplayLock              = 51
+	IVTPMediaLicenseStatus      = 53
+	IVTPSetKbdLang              = 55
+	IVTPMediaFreeInstance       = 56
+	IVTPSOCVideoEngConfig       = 4099
+)
+
+// Display lock command values.
+const (
+	DisplayUnlock byte = 0
+	DisplayLock   byte = 1
+	DisplayQuery  byte = 2
+)
+
+// Mouse mode values.
+const (
+	MouseModeRelative byte = 1
+	MouseModeAbsolute byte = 2
 )
 
 // Session validation results.

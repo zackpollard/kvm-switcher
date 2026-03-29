@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -758,8 +759,11 @@ func (s *Server) KVMPowerControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		password := os.Getenv(serverCfg.CredentialEnv)
-		if err := bridge.BMCColdReset(session.BMCIP, serverCfg.Username, password); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+		out, err := exec.Command("ipmitool", "-I", "lanplus",
+			"-H", session.BMCIP, "-U", serverCfg.Username, "-P", password,
+			"mc", "reset", "cold").CombinedOutput()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("BMC cold reset failed: %s: %v", string(out), err))
 			return
 		}
 		log.Printf("KVM BMC cold reset: %s (session %s)", session.ServerName, id)

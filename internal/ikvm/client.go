@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ type Client struct {
 	conn          net.Conn
 	reader        *bufio.Reader // buffered reader for the connection
 	mu            sync.Mutex    // protects writes to conn
+	log           Logger
 	host          string
 	port          int           // TCP connection port (kvmport, typically 80)
 	webSecurePort int           // CONNECT tunnel target port (websecureport, typically 443)
@@ -46,6 +48,7 @@ type ClientConfig struct {
 	WebCookie     string
 	KVMToken      string
 	UseSSL        bool
+	Logger        Logger // optional; defaults to log.Default()
 }
 
 // NewClient creates a new IVTP client (does not connect yet).
@@ -54,7 +57,12 @@ func NewClient(cfg ClientConfig) *Client {
 	if webSecPort == 0 {
 		webSecPort = 443 // default from JNLP
 	}
+	l := cfg.Logger
+	if l == nil {
+		l = log.Default()
+	}
 	return &Client{
+		log:           l,
 		host:          cfg.Host,
 		port:          cfg.Port,
 		webSecurePort: webSecPort,
@@ -70,7 +78,7 @@ func NewClient(cfg ClientConfig) *Client {
 // handshake, and authenticates the IVTP session.
 func (c *Client) Connect() error {
 	addr := net.JoinHostPort(c.host, fmt.Sprintf("%d", c.port))
-	log.Printf("iKVM: connecting to %s", addr)
+	c.log.Printf("iKVM: connecting to %s", addr)
 
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
@@ -85,7 +93,7 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("single-port handshake: %w", err)
 	}
 
-	log.Printf("iKVM: single-port handshake complete, waiting for session acceptance")
+	c.log.Printf("iKVM: single-port handshake complete, waiting for session acceptance")
 	return nil
 }
 
@@ -126,7 +134,7 @@ func (c *Client) singlePortHandshake() error {
 		return fmt.Errorf("tunnel handshake rejected: %s", resp)
 	}
 
-	log.Printf("iKVM: tunnel response: %q", resp)
+	c.log.Printf("iKVM: tunnel response: %q", resp)
 	return nil
 }
 
@@ -172,7 +180,7 @@ func (c *Client) RunSession() error {
 	if hdr.Type != IVTPSessionAccepted {
 		return fmt.Errorf("expected SESSION_ACCEPTED (23), got type %d", hdr.Type)
 	}
-	log.Printf("iKVM: session accepted (status=%d)", hdr.Status)
+	c.log.Printf("iKVM: session accepted (status=%d)", hdr.Status)
 
 	// Send web token: IVTP type 21 (GET_WEB_TOKEN) with the web cookie as payload.
 	// JViewer sends getM_webSession_token() which is the -webcookie arg (= SessionCookie).
@@ -180,7 +188,7 @@ func (c *Client) RunSession() error {
 	if err := c.sendMessageWithPayload(IVTPGetWebToken, 0, tokenBytes); err != nil {
 		return fmt.Errorf("sending web token: %w", err)
 	}
-	log.Printf("iKVM: sent web token (%d bytes)", len(tokenBytes))
+	c.log.Printf("iKVM: sent web token (%d bytes)", len(tokenBytes))
 
 	// Send session validation: IVTP type 18 (VALIDATE_VIDEO_SESSION)
 	// Payload (324 bytes): [tokenType:1][token:129][clientIP:65][username:129]
@@ -195,14 +203,14 @@ func (c *Client) RunSession() error {
 	if err := c.sendMessageWithPayload(IVTPValidateVideoSession, 0, validPayload); err != nil {
 		return fmt.Errorf("sending session validation: %w", err)
 	}
-	log.Printf("iKVM: sent session validation (%d byte payload, kvmToken=%s, ip=%s)",
+	c.log.Printf("iKVM: sent session validation (%d byte payload, kvmToken=%s, ip=%s)",
 		len(validPayload), c.kvmToken, localAddr)
 
 	// Send RESUME_REDIRECTION to start receiving video
 	if err := c.SendHeader(IVTPResumeRedirection, 0, 0); err != nil {
 		return fmt.Errorf("sending resume redirection: %w", err)
 	}
-	log.Printf("iKVM: sent resume redirection, starting read loop")
+	c.log.Printf("iKVM: sent resume redirection, starting read loop")
 
 	// Handle the VALIDATE_VIDEO_SESSION_RESPONSE and enter main loop
 	_ = payload // unused from SESSION_ACCEPTED
@@ -234,74 +242,74 @@ func (c *Client) readLoop() error {
 			if len(payload) > 0 && payload[0] == 0 {
 				return fmt.Errorf("session validation failed: invalid session")
 			}
-			log.Printf("iKVM: session validated (result=%d)", payload[0])
+			c.log.Printf("iKVM: session validated (result=%d)", payload[0])
 			// Send exactly what JViewer sends in OnValidVideoSession():
 			// 1. Power status request (type 34, no payload)
 			c.SendHeader(IVTPPowerStatus, 0, 0)
-			// 2. Lock screen query (type 51, pktSize=1, payload=0x02)
-			c.sendMessageWithPayload(51, 0, []byte{2})
-			// 3. Get user macro (type 40, no payload)
-			c.SendHeader(40, 0, 0)
-			log.Printf("iKVM: sent post-validation requests (power, lockscreen, macro)")
+			// 2. Lock screen query
+			c.sendMessageWithPayload(IVTPDisplayLock, 0, []byte{DisplayQuery})
+			// 3. Get user macro
+			c.SendHeader(IVTPGetUserMacro, 0, 0)
+			c.log.Printf("iKVM: sent post-validation requests (power, lockscreen, macro)")
 
 		case IVTPBlankScreen:
-			log.Printf("iKVM: blank screen (no signal)")
+			c.log.Printf("iKVM: blank screen (no signal)")
 
 		case IVTPStopSessionImmediate:
-			log.Printf("iKVM: stop session (status=%d)", hdr.Status)
+			c.log.Printf("iKVM: stop session (status=%d)", hdr.Status)
 			return fmt.Errorf("session stopped by BMC (status=%d)", hdr.Status)
 
 		case IVTPGetUSBMouseMode:
 			if len(payload) > 0 {
-				log.Printf("iKVM: mouse mode = %d", payload[0])
+				c.log.Printf("iKVM: mouse mode = %d", payload[0])
 			}
 
 		case IVTPGetKeybdLED:
 			// Keyboard LED status update, informational only
 
 		case IVTPPowerStatus:
-			log.Printf("iKVM: power status = %d", hdr.Status)
+			c.log.Printf("iKVM: power status = %d", hdr.Status)
 
 		case IVTPEncryptionStatus, IVTPInitialEncryptionStatus:
-			log.Printf("iKVM: encryption status (type=%d)", hdr.Type)
+			c.log.Printf("iKVM: encryption status (type=%d)", hdr.Type)
 
 		case IVTPBWDetectResp:
 			// Bandwidth detection response, discard
 
 		case IVTPMaxSessionClosing:
-			log.Printf("iKVM: max session reached (status=%d)", hdr.Status)
+			c.log.Printf("iKVM: max session reached (status=%d)", hdr.Status)
 			return fmt.Errorf("max KVM sessions reached")
 
 		case IVTPKVMSharing:
-			log.Printf("iKVM: KVM sharing event (status=%d)", hdr.Status)
+			c.log.Printf("iKVM: KVM sharing event (status=%d)", hdr.Status)
 
-		case 50: // IVTP_SET_NEXT_MASTER
-			log.Printf("iKVM: set next master (status=%d)", hdr.Status)
+		case IVTPSetNextMaster:
+			c.log.Printf("iKVM: set next master (status=%d)", hdr.Status)
 
-		case 4099: // SOC video engine config
+		case IVTPSOCVideoEngConfig:
 			// Informational — BMC reports current video engine settings
 
-		case 37: // CONF_SERVICE_STATUS
-			log.Printf("iKVM: conf service status (%d bytes)", hdr.PktSize)
+		case IVTPConfServiceStatus:
+			c.log.Printf("iKVM: conf service status (%d bytes)", hdr.PktSize)
 
-		case 39: // GET_ACTIVE_CLIENTS - JViewer responds with sendFullScreenRequest
-			log.Printf("iKVM: active clients info, sending full screen request")
+		case IVTPGetActiveClients:
+			c.log.Printf("iKVM: active clients info, sending full screen request")
 			c.SendHeader(IVTPGetFullScreen, 0, 0)
 
-		case 40: // ADVISER_GET_USER_MACRO response
-			log.Printf("iKVM: user macro data (%d bytes)", hdr.PktSize)
+		case IVTPGetUserMacro:
+			c.log.Printf("iKVM: user macro data (%d bytes)", hdr.PktSize)
 
-		case 53: // MEDIA_LICENSE_STATUS
-			log.Printf("iKVM: media license status=%d", hdr.Status)
+		case IVTPMediaLicenseStatus:
+			c.log.Printf("iKVM: media license status=%d", hdr.Status)
 
-		case 56: // MEDIA_FREE_INSTANCE_STATUS
-			log.Printf("iKVM: media free instance status")
+		case IVTPMediaFreeInstance:
+			c.log.Printf("iKVM: media free instance status")
 
 		default:
 			if c.OnCtrlMsg != nil {
 				c.OnCtrlMsg(hdr, payload)
 			} else {
-				log.Printf("iKVM: unhandled message type=%d size=%d status=%d", hdr.Type, hdr.PktSize, hdr.Status)
+				c.log.Printf("iKVM: unhandled message type=%d size=%d status=%d", hdr.Type, hdr.PktSize, hdr.Status)
 			}
 		}
 	}
