@@ -139,6 +139,13 @@ func (p *Provider) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		Roles: p.extractRoles(claims),
 	}
 
+	// Rotate session: invalidate any existing session to prevent session fixation.
+	if oldCookie, err := r.Cookie(sessionCookieName); err == nil && oldCookie.Value != "" {
+		p.mu.Lock()
+		delete(p.sessions, oldCookie.Value)
+		p.mu.Unlock()
+	}
+
 	// Create server-side session
 	sessionID, err := randomString(32)
 	if err != nil {

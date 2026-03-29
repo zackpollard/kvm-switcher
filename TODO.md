@@ -62,7 +62,7 @@
 ### Production Hardening
 - [x] Configure restrictive CORS origins — WebSocket upgraders now check configured origins
 - [ ] Remove InsecureSkipVerify from iDRAC9 WebSocket proxy (add proper CA trust)
-- [ ] Add session cookie rotation on privilege changes
+- [x] Add session cookie rotation on privilege changes
 - [x] Document and enforce audit log retention/cleanup policy — 90-day default, hourly purge
 - [x] Rate limit BMC proxy requests — 300 RPM default, mutation endpoints also protected
 
