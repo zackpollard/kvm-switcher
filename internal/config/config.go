@@ -140,6 +140,9 @@ func setDefaults(cfg *models.AppConfig) {
 				cfg.Servers[i].BMCPort = 80
 			}
 		}
+		if cfg.Servers[i].PollIntervalSeconds <= 0 {
+			cfg.Servers[i].PollIntervalSeconds = 30
+		}
 	}
 }
 

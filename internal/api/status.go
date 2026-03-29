@@ -196,19 +196,42 @@ func PollStatuses(servers []models.ServerConfig, cache *StatusCache) {
 	wg.Wait()
 }
 
-// StartStatusPoller starts a background goroutine that polls all server statuses
-// every 30 seconds. It runs an initial poll immediately.
+// StartStatusPoller starts a background goroutine that polls server statuses
+// respecting per-server PollIntervalSeconds. It runs an initial poll of all
+// servers immediately, then uses a 10-second tick to check which servers are
+// due for their next poll.
 func StartStatusPoller(servers []models.ServerConfig, cache *StatusCache) {
 	go func() {
 		log.Printf("Status poller: starting initial poll for %d servers", len(servers))
 		PollStatuses(servers, cache)
 		log.Printf("Status poller: initial poll complete")
 
-		ticker := time.NewTicker(30 * time.Second)
+		// Track when each server was last polled (initial poll = now).
+		lastPolled := make(map[string]time.Time, len(servers))
+		for _, s := range servers {
+			lastPolled[s.Name] = time.Now()
+		}
+
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			log.Printf("Status poller: tick, polling %d servers", len(servers))
-			PollStatuses(servers, cache)
+			var due []models.ServerConfig
+			now := time.Now()
+			for _, s := range servers {
+				interval := time.Duration(s.PollIntervalSeconds) * time.Second
+				if now.Sub(lastPolled[s.Name]) >= interval {
+					due = append(due, s)
+				}
+			}
+			if len(due) == 0 {
+				continue
+			}
+			log.Printf("Status poller: tick, polling %d/%d servers", len(due), len(servers))
+			PollStatuses(due, cache)
+			now = time.Now()
+			for _, s := range due {
+				lastPolled[s.Name] = now
+			}
 			log.Printf("Status poller: tick complete")
 		}
 	}()
