@@ -44,7 +44,7 @@
 - [x] Session management tests (getSession, listSessions, keepAlive, delete, create, WebSocket URL)
 - [x] Error state tests (API error paths: power control, session conflicts, IPMI errors)
 - [x] KVMViewer component tests (10 tests: events, credentials, Ctrl+Alt+Del, desktop name)
-- [ ] Accessibility / responsive design tests
+- [x] Accessibility fixes (ARIA labels, roles, live regions, keyboard nav) and tests (11 tests)
 
 ### Backend Testing
 - [x] iKVM bridge tests (lifecycle, screenshot BGRA→RGBA, commands, VNC message building, frame tracking)
