@@ -138,7 +138,7 @@
 			size="small"
 			variant="outline"
 			color="secondary"
-			shape="round"
+			shape="semi-round"
 		>
 			Refresh
 		</Button>
@@ -224,7 +224,7 @@
 														<span class="text-muted">({st.image_version})</span>
 													{/if}
 													{#if st.update_available}
-														<Badge size="tiny" color="warning" shape="round">Update</Badge>
+														<Badge size="tiny" color="warning" shape="semi-round">Update</Badge>
 													{/if}
 												</div>
 											{/if}
@@ -279,7 +279,7 @@
 											size="small"
 											variant="outline"
 											color="secondary"
-											shape="round"
+											shape="semi-round"
 											loading={openingIPMI === server.name}
 										>
 											{#if openingIPMI === server.name}
@@ -295,7 +295,7 @@
 												size="small"
 												variant="filled"
 												color="primary"
-												shape="round"
+												shape="semi-round"
 												loading={connecting === server.name}
 											>
 												{#if connecting === server.name}
