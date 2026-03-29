@@ -76,7 +76,7 @@ func (b *Bridge) SendDisplayLock(lock bool) error {
 	if lock {
 		cmd = DisplayLock
 	}
-	return b.client.sendMessageWithPayload(IVTPDisplayLock, 0, []byte{cmd})
+	return b.client.SendMessageWithPayload(IVTPDisplayLock, 0, []byte{cmd})
 }
 
 // ResetVideo sends a pause/resume cycle to reset the BMC's video capture engine.
@@ -114,7 +114,7 @@ func (b *Bridge) SetKeyboardLayout(layout string) error {
 	if b.client == nil {
 		return fmt.Errorf("not connected")
 	}
-	return b.client.sendMessageWithPayload(IVTPSetKbdLang, 0, []byte(layout))
+	return b.client.SendMessageWithPayload(IVTPSetKbdLang, 0, []byte(layout))
 }
 
 // SendIPMICommand sends a raw IPMI command through the KVM tunnel.
@@ -122,7 +122,7 @@ func (b *Bridge) SendIPMICommand(data []byte) error {
 	if b.client == nil {
 		return fmt.Errorf("not connected")
 	}
-	return b.client.sendMessageWithPayload(IVTPIPMIRequestPkt, 0, data)
+	return b.client.SendMessageWithPayload(IVTPIPMIRequestPkt, 0, data)
 }
 
 // NewBridge creates a bridge between noVNC (WebSocket) and BMC (IVTP).

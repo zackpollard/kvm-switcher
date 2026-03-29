@@ -185,7 +185,7 @@ func (c *Client) RunSession() error {
 	// Send web token: IVTP type 21 (GET_WEB_TOKEN) with the web cookie as payload.
 	// JViewer sends getM_webSession_token() which is the -webcookie arg (= SessionCookie).
 	tokenBytes := []byte(c.webCookie)
-	if err := c.sendMessageWithPayload(IVTPGetWebToken, 0, tokenBytes); err != nil {
+	if err := c.SendMessageWithPayload(IVTPGetWebToken, 0, tokenBytes); err != nil {
 		return fmt.Errorf("sending web token: %w", err)
 	}
 	c.log.Printf("iKVM: sent web token (%d bytes)", len(tokenBytes))
@@ -200,7 +200,7 @@ func (c *Client) RunSession() error {
 	copy(validPayload[130:195], []byte(localAddr))
 	copy(validPayload[195:324], []byte("admin"))
 
-	if err := c.sendMessageWithPayload(IVTPValidateVideoSession, 0, validPayload); err != nil {
+	if err := c.SendMessageWithPayload(IVTPValidateVideoSession, 0, validPayload); err != nil {
 		return fmt.Errorf("sending session validation: %w", err)
 	}
 	c.log.Printf("iKVM: sent session validation (%d byte payload, kvmToken=%s, ip=%s)",
@@ -247,7 +247,7 @@ func (c *Client) readLoop() error {
 			// 1. Power status request (type 34, no payload)
 			c.SendHeader(IVTPPowerStatus, 0, 0)
 			// 2. Lock screen query
-			c.sendMessageWithPayload(IVTPDisplayLock, 0, []byte{DisplayQuery})
+			c.SendMessageWithPayload(IVTPDisplayLock, 0, []byte{DisplayQuery})
 			// 3. Get user macro
 			c.SendHeader(IVTPGetUserMacro, 0, 0)
 			c.log.Printf("iKVM: sent post-validation requests (power, lockscreen, macro)")
@@ -379,8 +379,8 @@ func (c *Client) SendHeader(msgType uint16, pktSize uint32, status uint16) error
 	return err
 }
 
-// sendMessageWithPayload sends an IVTP header + payload.
-func (c *Client) sendMessageWithPayload(msgType uint16, status uint16, payload []byte) error {
+// SendMessageWithPayload sends an IVTP header + payload.
+func (c *Client) SendMessageWithPayload(msgType uint16, status uint16, payload []byte) error {
 	hdr := &IVTPHeader{
 		Type:    msgType,
 		PktSize: uint32(len(payload)),
