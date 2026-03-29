@@ -17,13 +17,28 @@ import (
 	vncbridge "github.com/zackpollard/kvm-switcher/internal/vnc"
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  4096,
-	WriteBufferSize: 4096,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for now; tighten in production
-	},
-	Subprotocols: []string{"binary"},
+// wsUpgrader returns a WebSocket upgrader that respects the configured CORS origins.
+func (s *Server) wsUpgrader() *websocket.Upgrader {
+	origins := s.Config.Settings.CORSOrigins
+	return &websocket.Upgrader{
+		ReadBufferSize:  4096,
+		WriteBufferSize: 4096,
+		CheckOrigin: func(r *http.Request) bool {
+			for _, o := range origins {
+				if o == "*" {
+					return true
+				}
+			}
+			origin := r.Header.Get("Origin")
+			for _, o := range origins {
+				if o == origin {
+					return true
+				}
+			}
+			return false
+		},
+		Subprotocols: []string{"binary"},
+	}
 }
 
 // HandleKVMWebSocket proxies WebSocket connections between the browser (noVNC)
@@ -91,7 +106,7 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 	}
 	defer backendConn.Close()
 
-	clientConn, err := upgrader.Upgrade(w, r, nil)
+	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
 		return
@@ -109,7 +124,7 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
 	log.Printf("Session %s: VNC connect (bridge running=%v)", session.ID, s.vncBridgeRunning(session.ID))
 
-	clientConn, err := upgrader.Upgrade(w, r, nil)
+	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
 		return
@@ -380,7 +395,7 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 
 	// Upgrade to WebSocket FIRST -- before any slow BMC auth -- so the browser
 	// has an established connection and doesn't time out / trigger reconnect.
-	clientConn, err := upgrader.Upgrade(w, r, nil)
+	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
 		return

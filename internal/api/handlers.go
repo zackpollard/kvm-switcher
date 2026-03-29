@@ -627,9 +627,7 @@ func (s *Server) HandleNanoKVMWebSocket(w http.ResponseWriter, r *http.Request) 
 	defer targetConn.Close()
 
 	// Upgrade the client connection
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
-	}
+	upgrader := s.wsUpgrader()
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("NanoKVM WS proxy: upgrade failed: %v", err)
