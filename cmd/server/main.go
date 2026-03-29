@@ -21,6 +21,14 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/store"
 )
 
+// @title KVM Switcher API
+// @version 1.0
+// @description Web-based KVM panel for managing remote server consoles via BMC/IPMI. Supports AMI MegaRAC (native iKVM), Dell iDRAC (VNC/WebSocket), and NanoKVM devices. Optional OIDC authentication with role-based access control.
+// @host localhost:8080
+// @BasePath /
+// @securityDefinitions.apikey CookieAuth
+// @in cookie
+// @name kvm_session
 func main() {
 	configPath := flag.String("config", "configs/servers.yaml", "Path to configuration file")
 	webDir := flag.String("web", "web/build", "Path to frontend static files")

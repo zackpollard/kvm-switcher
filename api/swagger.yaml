@@ -1,0 +1,827 @@
+basePath: /
+definitions:
+  api.CreateSessionRequest:
+    properties:
+      server_name:
+        type: string
+    type: object
+  api.ServerInfo:
+    properties:
+      active_session_id:
+        type: string
+      bmc_ip:
+        type: string
+      bmc_port:
+        type: integer
+      board_type:
+        type: string
+      has_active_session:
+        type: boolean
+      name:
+        type: string
+    type: object
+  api.sessionResponse:
+    properties:
+      bmc_ip:
+        type: string
+      conn_mode:
+        $ref: '#/definitions/models.KVMMode'
+      created_at:
+        type: string
+      error:
+        type: string
+      id:
+        type: string
+      idle_timeout_remaining_seconds:
+        type: number
+      kvm_password:
+        description: VNC auth password (if needed)
+        type: string
+      last_activity:
+        type: string
+      server_name:
+        type: string
+      status:
+        $ref: '#/definitions/models.SessionStatus'
+    type: object
+  models.AuditEntry:
+    properties:
+      details: {}
+      event_type:
+        type: string
+      id:
+        type: integer
+      remote_addr:
+        type: string
+      server_name:
+        type: string
+      session_id:
+        type: string
+      timestamp:
+        type: string
+      user_email:
+        type: string
+    type: object
+  models.DeviceStatus:
+    properties:
+      app_version:
+        description: 'NanoKVM: application version'
+        type: string
+      battery_pct:
+        type: number
+      circuit_breaker_state:
+        description: '"closed", "open", "half-open"'
+        type: string
+      health:
+        description: '"ok", "warning", "critical", ""'
+        type: string
+      image_version:
+        description: 'NanoKVM: firmware image version'
+        type: string
+      load_amps:
+        type: number
+      load_pct:
+        description: 'UPS: percentage of rated capacity'
+        type: number
+      load_watts:
+        type: number
+      model:
+        type: string
+      online:
+        type: boolean
+      power_state:
+        description: '"on", "off", ""'
+        type: string
+      runtime_min:
+        type: number
+      temperature_c:
+        type: number
+      update_available:
+        description: 'NanoKVM: firmware update available'
+        type: boolean
+      voltage:
+        type: number
+    type: object
+  models.DisplayLockRequest:
+    properties:
+      lock:
+        example: true
+        type: boolean
+    type: object
+  models.DisplayLockResponse:
+    properties:
+      lock:
+        example: true
+        type: boolean
+      status:
+        example: ok
+        type: string
+    type: object
+  models.ErrorResponse:
+    properties:
+      error:
+        example: session not found
+        type: string
+    type: object
+  models.IPMICommandRequest:
+    properties:
+      data:
+        description: Data contains raw IPMI command bytes, base64-encoded
+        items:
+          type: integer
+        type: array
+    type: object
+  models.IPMISessionResponse:
+    properties:
+      board_type:
+        example: ami_megarac
+        type: string
+      csrf_token:
+        example: def456
+        type: string
+      extended_priv:
+        example: 259
+        type: integer
+      privilege:
+        example: 4
+        type: integer
+      session_cookie:
+        example: SessionCookie=abc123
+        type: string
+      username:
+        example: admin
+        type: string
+    type: object
+  models.KVMMode:
+    enum:
+    - websocket
+    - vnc
+    - ikvm
+    type: string
+    x-enum-comments:
+      KVMModeIKVM: Native IVTP protocol (AMI MegaRAC)
+      KVMModeVNC: Proxy WS → raw TCP VNC (iDRAC8)
+      KVMModeWebSocket: Proxy WS → remote WSS (iDRAC9 HTML5)
+    x-enum-descriptions:
+    - Proxy WS → remote WSS (iDRAC9 HTML5)
+    - Proxy WS → raw TCP VNC (iDRAC8)
+    - Native IVTP protocol (AMI MegaRAC)
+    x-enum-varnames:
+    - KVMModeWebSocket
+    - KVMModeVNC
+    - KVMModeIKVM
+  models.KVMSession:
+    properties:
+      bmc_ip:
+        type: string
+      conn_mode:
+        $ref: '#/definitions/models.KVMMode'
+      created_at:
+        type: string
+      error:
+        type: string
+      id:
+        type: string
+      kvm_password:
+        description: VNC auth password (if needed)
+        type: string
+      last_activity:
+        type: string
+      server_name:
+        type: string
+      status:
+        $ref: '#/definitions/models.SessionStatus'
+    type: object
+  models.KeyboardLayoutRequest:
+    properties:
+      layout:
+        enum:
+        - en
+        - fr
+        - de
+        - es
+        - jp
+        example: en
+        type: string
+    type: object
+  models.KeyboardLayoutResponse:
+    properties:
+      layout:
+        example: en
+        type: string
+      status:
+        example: ok
+        type: string
+    type: object
+  models.MouseModeRequest:
+    properties:
+      mode:
+        enum:
+        - relative
+        - absolute
+        example: absolute
+        type: string
+    type: object
+  models.MouseModeResponse:
+    properties:
+      mode:
+        example: absolute
+        type: string
+      status:
+        example: ok
+        type: string
+    type: object
+  models.PowerControlRequest:
+    properties:
+      action:
+        enum:
+        - "on"
+        - "off"
+        - cycle
+        - reset
+        - soft_reset
+        - bmc_reset
+        example: cycle
+        type: string
+    type: object
+  models.PowerControlResponse:
+    properties:
+      action:
+        example: cycle
+        type: string
+      status:
+        example: ok
+        type: string
+    type: object
+  models.SessionStatus:
+    enum:
+    - starting
+    - connected
+    - disconnected
+    - error
+    type: string
+    x-enum-varnames:
+    - SessionStarting
+    - SessionConnected
+    - SessionDisconnected
+    - SessionError
+  models.StatusOkResponse:
+    properties:
+      status:
+        example: ok
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Web-based KVM panel for managing remote server consoles via BMC/IPMI.
+    Supports AMI MegaRAC (native iKVM), Dell iDRAC (VNC/WebSocket), and NanoKVM devices.
+    Optional OIDC authentication with role-based access control.
+  title: KVM Switcher API
+  version: "1.0"
+paths:
+  /api/audit-log:
+    get:
+      description: Returns audit log entries filtered by the given query parameters.
+        Returns 404 if audit logging is not enabled.
+      parameters:
+      - description: Filter by event type
+        in: query
+        name: event_type
+        type: string
+      - description: Filter by server name
+        in: query
+        name: server_name
+        type: string
+      - description: Filter by user email
+        in: query
+        name: user_email
+        type: string
+      - description: Maximum number of entries to return
+        in: query
+        name: limit
+        type: integer
+      - description: Number of entries to skip (for pagination)
+        in: query
+        name: offset
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.AuditEntry'
+            type: array
+        "404":
+          description: Audit log not enabled
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Failed to query audit log
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Query audit log
+      tags:
+      - audit
+  /api/ipmi-session/{name}:
+    post:
+      description: Pre-authenticates with the BMC and returns session credentials
+        so the IPMI web UI can load directly to the dashboard without a login prompt.
+      parameters:
+      - description: Server name from the configuration
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: BMC session credentials
+          schema:
+            $ref: '#/definitions/models.IPMISessionResponse'
+        "403":
+          description: OIDC access denied
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Server not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "502":
+          description: BMC authentication failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Create IPMI web session
+      tags:
+      - ipmi
+  /api/server-status:
+    get:
+      description: Returns cached status information for all configured devices, keyed
+        by server name. Includes power state, health, UPS metrics, and circuit breaker
+        state.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              $ref: '#/definitions/models.DeviceStatus'
+            type: object
+      summary: Get all server statuses
+      tags:
+      - servers
+  /api/servers:
+    get:
+      description: Returns all configured servers. When OIDC RBAC is enabled, the
+        list is filtered to servers the authenticated user has access to.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/api.ServerInfo'
+            type: array
+      summary: List servers
+      tags:
+      - servers
+  /api/sessions:
+    get:
+      description: Returns all KVM sessions (active, starting, disconnected, and errored).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.KVMSession'
+            type: array
+      summary: List all sessions
+      tags:
+      - sessions
+    post:
+      consumes:
+      - application/json
+      description: Creates a new KVM session for the specified server. If a session
+        already exists for the server, returns the existing session (200). The session
+        starts asynchronously; poll GET /api/sessions/{id} until status is "connected".
+        Returns 429 if the concurrent session limit is reached.
+      parameters:
+      - description: Session creation request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateSessionRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Existing active session returned
+          schema:
+            $ref: '#/definitions/models.KVMSession'
+        "202":
+          description: Session created and starting asynchronously
+          schema:
+            $ref: '#/definitions/models.KVMSession'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "403":
+          description: OIDC access denied to this server
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Server not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "429":
+          description: Maximum concurrent sessions reached
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Create a KVM session
+      tags:
+      - sessions
+  /api/sessions/{id}:
+    delete:
+      description: Terminates a KVM session. Logs out from the BMC, stops any active
+        iKVM or VNC bridges, and marks the session as disconnected.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Session terminated
+          schema:
+            $ref: '#/definitions/models.KVMSession'
+        "404":
+          description: Session not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Delete a session
+      tags:
+      - sessions
+    get:
+      description: Returns a single KVM session by ID. Connected sessions include
+        the idle_timeout_remaining_seconds field.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Session details with optional idle timeout info
+          schema:
+            $ref: '#/definitions/api.sessionResponse'
+        "404":
+          description: Session not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get session details
+      tags:
+      - sessions
+  /api/sessions/{id}/display-lock:
+    post:
+      consumes:
+      - application/json
+      description: Locks or unlocks the host server's physical display output.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Display lock request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.DisplayLockRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Display lock state changed
+          schema:
+            $ref: '#/definitions/models.DisplayLockResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Display lock command failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Display lock
+      tags:
+      - kvm
+  /api/sessions/{id}/ipmi:
+    post:
+      consumes:
+      - application/json
+      description: Sends a raw IPMI command through the KVM tunnel as base64-encoded
+        bytes.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: IPMI command request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.IPMICommandRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: IPMI command sent
+          schema:
+            $ref: '#/definitions/models.StatusOkResponse'
+        "400":
+          description: Invalid request body or empty data
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: IPMI command failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Raw IPMI command
+      tags:
+      - kvm
+  /api/sessions/{id}/keepalive:
+    patch:
+      description: Resets the idle timeout for a session by updating its last activity
+        timestamp.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Keepalive acknowledged
+          schema:
+            $ref: '#/definitions/models.StatusOkResponse'
+        "404":
+          description: Session not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Keep session alive
+      tags:
+      - sessions
+  /api/sessions/{id}/keyboard-layout:
+    post:
+      consumes:
+      - application/json
+      description: Changes the keyboard layout for the KVM session. Supported layouts
+        map to JViewer keyboard layout codes.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Keyboard layout request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.KeyboardLayoutRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Keyboard layout changed
+          schema:
+            $ref: '#/definitions/models.KeyboardLayoutResponse'
+        "400":
+          description: Invalid request body or layout
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Keyboard layout command failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Set keyboard layout
+      tags:
+      - kvm
+  /api/sessions/{id}/mouse-mode:
+    post:
+      consumes:
+      - application/json
+      description: Switches between relative and absolute mouse input modes.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Mouse mode request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.MouseModeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Mouse mode changed
+          schema:
+            $ref: '#/definitions/models.MouseModeResponse'
+        "400":
+          description: Invalid request body or mode
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Mouse mode command failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Set mouse mode
+      tags:
+      - kvm
+  /api/sessions/{id}/power:
+    post:
+      consumes:
+      - application/json
+      description: Sends a power command to the server through the active KVM tunnel.
+        Most actions use the IVTP protocol; bmc_reset uses ipmitool for a BMC cold
+        reset.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Power control request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.PowerControlRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Power command sent
+          schema:
+            $ref: '#/definitions/models.PowerControlResponse'
+        "400":
+          description: Invalid request body or action
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Power command failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Power control
+      tags:
+      - kvm
+  /api/sessions/{id}/reset-video:
+    post:
+      description: Sends a pause/resume cycle to reset the BMC's video capture engine.
+        No request body required.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Video engine reset
+          schema:
+            $ref: '#/definitions/models.StatusOkResponse'
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Reset video command failed
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Reset video engine
+      tags:
+      - kvm
+  /api/sessions/{id}/screenshot:
+    get:
+      description: Returns the current KVM framebuffer as a PNG image.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - image/png
+      responses:
+        "200":
+          description: PNG screenshot of the current framebuffer
+          schema:
+            type: file
+        "404":
+          description: No active KVM bridge for this session
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: No framebuffer available yet
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get screenshot
+      tags:
+      - kvm
+  /api/ws:
+    get:
+      description: Proxies WebSocket connections from the NanoKVM SPA to the actual
+        NanoKVM device for HID (keyboard/mouse) and H264 video traffic. The target
+        device is identified by the nano-kvm-token cookie.
+      parameters:
+      - description: Authentication token identifying which NanoKVM device to proxy
+          to (sent as cookie)
+        in: header
+        name: nano-kvm-token
+        required: true
+        type: string
+      responses:
+        "101":
+          description: WebSocket upgrade successful
+        "401":
+          description: Missing or unknown nano-kvm-token cookie
+          schema:
+            type: string
+      summary: NanoKVM WebSocket proxy
+      tags:
+      - websocket
+  /ws/kvm/{id}:
+    get:
+      description: Upgrades to a WebSocket connection and proxies VNC/iKVM traffic
+        between the browser and the BMC. Uses the "binary" WebSocket subprotocol.
+        For iKVM sessions, the bridge authenticates with the BMC and establishes an
+        IVTP tunnel. For WebSocket sessions, proxies to the remote WSS endpoint. For
+        VNC sessions, proxies to the raw TCP VNC port.
+      parameters:
+      - description: Session ID
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "101":
+          description: WebSocket upgrade successful (binary subprotocol)
+        "404":
+          description: Session not found or not connected
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: KVM WebSocket proxy
+      tags:
+      - websocket
+securityDefinitions:
+  CookieAuth:
+    in: cookie
+    name: kvm_session
+    type: apiKey
+swagger: "2.0"

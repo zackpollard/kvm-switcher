@@ -33,6 +33,15 @@ jobs:
       - name: Test
         run: go test ./... -count=1 -race
 
+      - name: Check OpenAPI spec is up to date
+        run: |
+          go install github.com/swaggo/swag/cmd/swag@latest
+          swag init -g cmd/server/main.go -o api --outputTypes yaml
+          if ! git diff --exit-code api/swagger.yaml; then
+            echo "::error::api/swagger.yaml is out of date. Run 'make generate-api' and commit the result."
+            exit 1
+          fi
+
   frontend-checks:
     name: Frontend Check & Build
     runs-on: ubuntu-latest

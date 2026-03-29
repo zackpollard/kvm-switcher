@@ -42,8 +42,14 @@ func (s *Server) wsUpgrader() *websocket.Upgrader {
 	}
 }
 
-// HandleKVMWebSocket proxies WebSocket connections between the browser (noVNC)
-// and the KVM backend (container websockify, remote WSS, or raw VNC).
+// HandleKVMWebSocket godoc
+// @Summary KVM WebSocket proxy
+// @Description Upgrades to a WebSocket connection and proxies VNC/iKVM traffic between the browser and the BMC. Uses the "binary" WebSocket subprotocol. For iKVM sessions, the bridge authenticates with the BMC and establishes an IVTP tunnel. For WebSocket sessions, proxies to the remote WSS endpoint. For VNC sessions, proxies to the raw TCP VNC port.
+// @Tags websocket
+// @Param id path string true "Session ID"
+// @Success 101 "WebSocket upgrade successful (binary subprotocol)"
+// @Failure 404 {object} models.ErrorResponse "Session not found or not connected"
+// @Router /ws/kvm/{id} [get]
 func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 

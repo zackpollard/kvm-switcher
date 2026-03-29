@@ -87,7 +87,13 @@ type ServerInfo struct {
 	ActiveSessionID string `json:"active_session_id,omitempty"`
 }
 
-// ListServers handles GET /api/servers.
+// ListServers godoc
+// @Summary List servers
+// @Description Returns all configured servers. When OIDC RBAC is enabled, the list is filtered to servers the authenticated user has access to.
+// @Tags servers
+// @Produce json
+// @Success 200 {array} ServerInfo
+// @Router /api/servers [get]
 func (s *Server) ListServers(w http.ResponseWriter, r *http.Request) {
 	user := kvmoidc.UserFromContext(r.Context())
 	oidcEnabled := s.Config.OIDC.Enabled
@@ -121,7 +127,20 @@ type CreateSessionRequest struct {
 	ServerName string `json:"server_name"`
 }
 
-// CreateSession handles POST /api/sessions.
+// CreateSession godoc
+// @Summary Create a KVM session
+// @Description Creates a new KVM session for the specified server. If a session already exists for the server, returns the existing session (200). The session starts asynchronously; poll GET /api/sessions/{id} until status is "connected". Returns 429 if the concurrent session limit is reached.
+// @Tags sessions
+// @Accept json
+// @Produce json
+// @Param request body CreateSessionRequest true "Session creation request"
+// @Success 200 {object} models.KVMSession "Existing active session returned"
+// @Success 202 {object} models.KVMSession "Session created and starting asynchronously"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body"
+// @Failure 403 {object} models.ErrorResponse "OIDC access denied to this server"
+// @Failure 404 {object} models.ErrorResponse "Server not found"
+// @Failure 429 {object} models.ErrorResponse "Maximum concurrent sessions reached"
+// @Router /api/sessions [post]
 func (s *Server) CreateSession(w http.ResponseWriter, r *http.Request) {
 	var req CreateSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -330,7 +349,15 @@ type sessionResponse struct {
 	IdleTimeoutRemaining *float64 `json:"idle_timeout_remaining_seconds,omitempty"`
 }
 
-// GetSession handles GET /api/sessions/{id}.
+// GetSession godoc
+// @Summary Get session details
+// @Description Returns a single KVM session by ID. Connected sessions include the idle_timeout_remaining_seconds field.
+// @Tags sessions
+// @Produce json
+// @Param id path string true "Session ID"
+// @Success 200 {object} sessionResponse "Session details with optional idle timeout info"
+// @Failure 404 {object} models.ErrorResponse "Session not found"
+// @Router /api/sessions/{id} [get]
 func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	session, ok := s.Sessions.Get(id)
@@ -353,7 +380,15 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// KeepAliveSession handles PATCH /api/sessions/{id}/keepalive.
+// KeepAliveSession godoc
+// @Summary Keep session alive
+// @Description Resets the idle timeout for a session by updating its last activity timestamp.
+// @Tags sessions
+// @Produce json
+// @Param id path string true "Session ID"
+// @Success 200 {object} models.StatusOkResponse "Keepalive acknowledged"
+// @Failure 404 {object} models.ErrorResponse "Session not found"
+// @Router /api/sessions/{id}/keepalive [patch]
 func (s *Server) KeepAliveSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	session, ok := s.Sessions.Get(id)
@@ -376,12 +411,26 @@ func (s *Server) KeepAliveSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// ListSessions handles GET /api/sessions.
+// ListSessions godoc
+// @Summary List all sessions
+// @Description Returns all KVM sessions (active, starting, disconnected, and errored).
+// @Tags sessions
+// @Produce json
+// @Success 200 {array} models.KVMSession
+// @Router /api/sessions [get]
 func (s *Server) ListSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.Sessions.List())
 }
 
-// DeleteSession handles DELETE /api/sessions/{id}.
+// DeleteSession godoc
+// @Summary Delete a session
+// @Description Terminates a KVM session. Logs out from the BMC, stops any active iKVM or VNC bridges, and marks the session as disconnected.
+// @Tags sessions
+// @Produce json
+// @Param id path string true "Session ID"
+// @Success 200 {object} models.KVMSession "Session terminated"
+// @Failure 404 {object} models.ErrorResponse "Session not found"
+// @Router /api/sessions/{id} [delete]
 func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	session, ok := s.Sessions.Get(id)
@@ -435,14 +484,29 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, session)
 }
 
-// GetServerStatuses returns cached status for all devices.
+// GetServerStatuses godoc
+// @Summary Get all server statuses
+// @Description Returns cached status information for all configured devices, keyed by server name. Includes power state, health, UPS metrics, and circuit breaker state.
+// @Tags servers
+// @Produce json
+// @Success 200 {object} map[string]models.DeviceStatus
+// @Router /api/server-status [get]
 func (s *Server) GetServerStatuses(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.StatusCache.GetAll())
 }
 
-// CreateIPMISession handles POST /api/ipmi-session/{name}.
-// Pre-authenticates with the BMC so the IPMI web UI loads directly to the dashboard.
+// CreateIPMISession godoc
+// @Summary Create IPMI web session
+// @Description Pre-authenticates with the BMC and returns session credentials so the IPMI web UI can load directly to the dashboard without a login prompt.
+// @Tags ipmi
+// @Produce json
+// @Param name path string true "Server name from the configuration"
+// @Success 200 {object} models.IPMISessionResponse "BMC session credentials"
+// @Failure 403 {object} models.ErrorResponse "OIDC access denied"
+// @Failure 404 {object} models.ErrorResponse "Server not found"
+// @Failure 502 {object} models.ErrorResponse "BMC authentication failed"
+// @Router /api/ipmi-session/{name} [post]
 func (s *Server) CreateIPMISession(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 
@@ -580,10 +644,14 @@ func StartSessionManager(servers []models.ServerConfig, sc *StatusCache) {
 	}()
 }
 
-// HandleNanoKVMWebSocket proxies WebSocket connections from the NanoKVM SPA
-// to the actual NanoKVM device. The NanoKVM SPA connects to /api/ws (HID) and
-// /api/stream/h264 (video) using absolute paths. The Go server identifies
-// which NanoKVM to proxy to using the nano-kvm-token cookie.
+// HandleNanoKVMWebSocket godoc
+// @Summary NanoKVM WebSocket proxy
+// @Description Proxies WebSocket connections from the NanoKVM SPA to the actual NanoKVM device for HID (keyboard/mouse) and H264 video traffic. The target device is identified by the nano-kvm-token cookie.
+// @Tags websocket
+// @Param nano-kvm-token header string true "Authentication token identifying which NanoKVM device to proxy to (sent as cookie)"
+// @Success 101 "WebSocket upgrade successful"
+// @Failure 401 {string} string "Missing or unknown nano-kvm-token cookie"
+// @Router /api/ws [get]
 func (s *Server) HandleNanoKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Find which NanoKVM this token belongs to
 	token := ""
@@ -689,7 +757,20 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-// GetAuditLog handles GET /api/audit-log.
+// GetAuditLog godoc
+// @Summary Query audit log
+// @Description Returns audit log entries filtered by the given query parameters. Returns 404 if audit logging is not enabled.
+// @Tags audit
+// @Produce json
+// @Param event_type query string false "Filter by event type"
+// @Param server_name query string false "Filter by server name"
+// @Param user_email query string false "Filter by user email"
+// @Param limit query int false "Maximum number of entries to return"
+// @Param offset query int false "Number of entries to skip (for pagination)"
+// @Success 200 {array} models.AuditEntry
+// @Failure 404 {object} models.ErrorResponse "Audit log not enabled"
+// @Failure 500 {object} models.ErrorResponse "Failed to query audit log"
+// @Router /api/audit-log [get]
 func (s *Server) GetAuditLog(w http.ResponseWriter, r *http.Request) {
 	if s.AuditDB == nil {
 		writeError(w, http.StatusNotFound, "audit log not enabled")
@@ -727,8 +808,19 @@ func (s *Server) getBridge(sessionID string) *ikvm.Bridge {
 	return s.Bridges[sessionID]
 }
 
-// KVMPowerControl sends a power command to the BMC through the KVM tunnel.
-// POST /api/sessions/{id}/power  body: {"action": "on"|"off"|"cycle"|"reset"|"soft_reset"}
+// KVMPowerControl godoc
+// @Summary Power control
+// @Description Sends a power command to the server through the active KVM tunnel. Most actions use the IVTP protocol; bmc_reset uses ipmitool for a BMC cold reset.
+// @Tags kvm
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID"
+// @Param request body models.PowerControlRequest true "Power control request"
+// @Success 200 {object} models.PowerControlResponse "Power command sent"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body or action"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 500 {object} models.ErrorResponse "Power command failed"
+// @Router /api/sessions/{id}/power [post]
 func (s *Server) KVMPowerControl(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)
@@ -810,8 +902,19 @@ func (s *Server) KVMPowerControl(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": req.Action})
 }
 
-// KVMDisplayLock locks or unlocks the host display.
-// POST /api/sessions/{id}/display-lock  body: {"lock": true|false}
+// KVMDisplayLock godoc
+// @Summary Display lock
+// @Description Locks or unlocks the host server's physical display output.
+// @Tags kvm
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID"
+// @Param request body models.DisplayLockRequest true "Display lock request"
+// @Success 200 {object} models.DisplayLockResponse "Display lock state changed"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 500 {object} models.ErrorResponse "Display lock command failed"
+// @Router /api/sessions/{id}/display-lock [post]
 func (s *Server) KVMDisplayLock(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)
@@ -849,8 +952,16 @@ func (s *Server) KVMDisplayLock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "lock": req.Lock})
 }
 
-// KVMResetVideo sends a pause/resume cycle to reset the BMC's video capture engine.
-// POST /api/sessions/{id}/reset-video
+// KVMResetVideo godoc
+// @Summary Reset video engine
+// @Description Sends a pause/resume cycle to reset the BMC's video capture engine. No request body required.
+// @Tags kvm
+// @Produce json
+// @Param id path string true "Session ID"
+// @Success 200 {object} models.StatusOkResponse "Video engine reset"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 500 {object} models.ErrorResponse "Reset video command failed"
+// @Router /api/sessions/{id}/reset-video [post]
 func (s *Server) KVMResetVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)
@@ -880,8 +991,19 @@ func (s *Server) KVMResetVideo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
-// KVMMouseMode sets the mouse input mode.
-// POST /api/sessions/{id}/mouse-mode  body: {"mode": "relative"|"absolute"}
+// KVMMouseMode godoc
+// @Summary Set mouse mode
+// @Description Switches between relative and absolute mouse input modes.
+// @Tags kvm
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID"
+// @Param request body models.MouseModeRequest true "Mouse mode request"
+// @Success 200 {object} models.MouseModeResponse "Mouse mode changed"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body or mode"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 500 {object} models.ErrorResponse "Mouse mode command failed"
+// @Router /api/sessions/{id}/mouse-mode [post]
 func (s *Server) KVMMouseMode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)
@@ -930,8 +1052,19 @@ func (s *Server) KVMMouseMode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": req.Mode})
 }
 
-// KVMKeyboardLayout changes the keyboard layout.
-// POST /api/sessions/{id}/keyboard-layout  body: {"layout": "en"|"fr"|"de"|"es"|"jp"}
+// KVMKeyboardLayout godoc
+// @Summary Set keyboard layout
+// @Description Changes the keyboard layout for the KVM session. Supported layouts map to JViewer keyboard layout codes.
+// @Tags kvm
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID"
+// @Param request body models.KeyboardLayoutRequest true "Keyboard layout request"
+// @Success 200 {object} models.KeyboardLayoutResponse "Keyboard layout changed"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body or layout"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 500 {object} models.ErrorResponse "Keyboard layout command failed"
+// @Router /api/sessions/{id}/keyboard-layout [post]
 func (s *Server) KVMKeyboardLayout(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)
@@ -987,8 +1120,19 @@ func (s *Server) KVMKeyboardLayout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "layout": req.Layout})
 }
 
-// KVMIPMICommand sends a raw IPMI command through the KVM tunnel.
-// POST /api/sessions/{id}/ipmi  body: {"data": [byte array as hex string]}
+// KVMIPMICommand godoc
+// @Summary Raw IPMI command
+// @Description Sends a raw IPMI command through the KVM tunnel as base64-encoded bytes.
+// @Tags kvm
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID"
+// @Param request body models.IPMICommandRequest true "IPMI command request"
+// @Success 200 {object} models.StatusOkResponse "IPMI command sent"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body or empty data"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 500 {object} models.ErrorResponse "IPMI command failed"
+// @Router /api/sessions/{id}/ipmi [post]
 func (s *Server) KVMIPMICommand(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)
@@ -1100,8 +1244,16 @@ func (s *Server) CleanupStaleBMCCreds(ttlMinutes int) {
 	}
 }
 
-// KVMScreenshot returns the current framebuffer as a PNG image.
-// GET /api/sessions/{id}/screenshot
+// KVMScreenshot godoc
+// @Summary Get screenshot
+// @Description Returns the current KVM framebuffer as a PNG image.
+// @Tags kvm
+// @Produce png
+// @Param id path string true "Session ID"
+// @Success 200 {file} binary "PNG screenshot of the current framebuffer"
+// @Failure 404 {object} models.ErrorResponse "No active KVM bridge for this session"
+// @Failure 503 {object} models.ErrorResponse "No framebuffer available yet"
+// @Router /api/sessions/{id}/screenshot [get]
 func (s *Server) KVMScreenshot(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	bridge := s.getBridge(id)

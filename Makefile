@@ -1,6 +1,6 @@
 .PHONY: all build build-frontend build-backend \
        run dev dev-backend dev-frontend dev-stack dev-stack-down \
-       test test-backend test-frontend test-e2e clean help
+       test test-backend test-frontend test-e2e generate-api clean help
 
 all: build
 
@@ -53,6 +53,11 @@ test-frontend: ## Run frontend vitest tests
 
 test-e2e: ## Run E2E browser tests (requires server running with BMC access)
 	cd tests/e2e && npm install && npx playwright test
+
+# ── Code Generation ──────────────────────────────────────────────────
+
+generate-api: ## Generate OpenAPI spec from code annotations
+	swag init -g cmd/server/main.go -o api --outputTypes yaml
 
 # ── Cleanup ──────────────────────────────────────────────────────────
 

@@ -255,6 +255,103 @@ type AuditLogger interface {
 	QueryAudit(filter AuditFilter) ([]AuditEntry, error)
 }
 
+// --- Swagger request/response types for API documentation ---
+
+// PowerControlRequest is the JSON body for POST /api/sessions/{id}/power.
+type PowerControlRequest struct {
+	Action string `json:"action" example:"cycle" enums:"on,off,cycle,reset,soft_reset,bmc_reset"`
+}
+
+// PowerControlResponse is the JSON response for a successful power command.
+type PowerControlResponse struct {
+	Status string `json:"status" example:"ok"`
+	Action string `json:"action" example:"cycle"`
+}
+
+// DisplayLockRequest is the JSON body for POST /api/sessions/{id}/display-lock.
+type DisplayLockRequest struct {
+	Lock bool `json:"lock" example:"true"`
+}
+
+// DisplayLockResponse is the JSON response for a successful display lock command.
+type DisplayLockResponse struct {
+	Status string `json:"status" example:"ok"`
+	Lock   bool   `json:"lock" example:"true"`
+}
+
+// MouseModeRequest is the JSON body for POST /api/sessions/{id}/mouse-mode.
+type MouseModeRequest struct {
+	Mode string `json:"mode" example:"absolute" enums:"relative,absolute"`
+}
+
+// MouseModeResponse is the JSON response for a successful mouse mode change.
+type MouseModeResponse struct {
+	Status string `json:"status" example:"ok"`
+	Mode   string `json:"mode" example:"absolute"`
+}
+
+// KeyboardLayoutRequest is the JSON body for POST /api/sessions/{id}/keyboard-layout.
+type KeyboardLayoutRequest struct {
+	Layout string `json:"layout" example:"en" enums:"en,fr,de,es,jp"`
+}
+
+// KeyboardLayoutResponse is the JSON response for a successful keyboard layout change.
+type KeyboardLayoutResponse struct {
+	Status string `json:"status" example:"ok"`
+	Layout string `json:"layout" example:"en"`
+}
+
+// IPMICommandRequest is the JSON body for POST /api/sessions/{id}/ipmi.
+type IPMICommandRequest struct {
+	// Data contains raw IPMI command bytes, base64-encoded
+	Data []byte `json:"data"`
+}
+
+// StatusOkResponse is a generic success response.
+type StatusOkResponse struct {
+	Status string `json:"status" example:"ok"`
+}
+
+// ErrorResponse is a generic error response.
+type ErrorResponse struct {
+	Error string `json:"error" example:"session not found"`
+}
+
+// IPMISessionResponse is the JSON response for POST /api/ipmi-session/{name}.
+type IPMISessionResponse struct {
+	BoardType    string `json:"board_type" example:"ami_megarac"`
+	SessionCookie string `json:"session_cookie" example:"SessionCookie=abc123"`
+	CSRFToken    string `json:"csrf_token" example:"def456"`
+	Username     string `json:"username" example:"admin"`
+	Privilege    int    `json:"privilege" example:"4"`
+	ExtendedPriv int    `json:"extended_priv" example:"259"`
+}
+
+// HealthResponse is the JSON response for GET /healthz.
+type HealthResponse struct {
+	Status string `json:"status" example:"ok"`
+}
+
+// ReadyResponse is the JSON response for GET /readyz.
+type ReadyResponse struct {
+	Status string `json:"status" example:"ready"`
+}
+
+// ReadyUnavailableResponse is the JSON response for GET /readyz when the database is unreachable.
+type ReadyUnavailableResponse struct {
+	Status string `json:"status" example:"unavailable"`
+	Reason string `json:"reason" example:"database unreachable"`
+}
+
+// AuthStatusResponse is the JSON response for GET /auth/me.
+type AuthStatusResponse struct {
+	Authenticated bool     `json:"authenticated" example:"true"`
+	OIDCEnabled   bool     `json:"oidc_enabled" example:"true"`
+	Email         string   `json:"email,omitempty" example:"user@example.com"`
+	Name          string   `json:"name,omitempty" example:"Jane Doe"`
+	Roles         []string `json:"roles,omitempty"`
+}
+
 // DeviceStatus holds polled status information for a single device.
 type DeviceStatus struct {
 	Online              bool    `json:"online"`
