@@ -1,4 +1,4 @@
-// Service Worker for IPMI BMC proxy — v2
+// Service Worker for IPMI BMC proxy — v3
 // Intercepts requests from BMC pages and rewrites them to /__bmc/{name}/...
 
 const clientServerMap = new Map(); // clientId -> serverName
@@ -26,6 +26,8 @@ function extractServerName(path) {
 // App routes that should never be proxied to a BMC
 function isAppRoute(path) {
 	return (
+		path === '/' ||
+		path.startsWith('/kvm/') ||
 		path.startsWith('/api/') ||
 		path.startsWith('/auth/') ||
 		path.startsWith('/ws/') ||
@@ -44,10 +46,15 @@ self.addEventListener('fetch', (event) => {
 	const path = url.pathname;
 
 	// Passthrough: app traffic and internal proxy path.
-	// Exception: /api/* and /ws/* requests from NanoKVM pages need to be
-	// proxied to the NanoKVM device (its SPA uses absolute /api/ paths
-	// that would otherwise hit our server's own API).
+	// When navigating back to an app route, clear the lastActiveServer so
+	// subsequent requests (favicon, SW scope checks, etc.) aren't misrouted.
 	if (isAppRoute(path)) {
+		if (event.request.mode === 'navigate') {
+			lastActiveServer = null;
+		}
+		// Exception: /api/* and /ws/* requests from NanoKVM pages need to be
+		// proxied to the NanoKVM device (its SPA uses absolute /api/ paths
+		// that would otherwise hit our server's own API).
 		if (path.startsWith('/api/') || path.startsWith('/ws/')) {
 			const clientName = event.clientId ? clientServerMap.get(event.clientId) : null;
 			if (clientName && nanoKVMServers.has(clientName)) {

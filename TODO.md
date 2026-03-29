@@ -23,7 +23,7 @@
 
 ### Service Worker
 - [ ] Refactor 3-layer fallback routing (clientId -> Referer -> lastActiveServer) into a cleaner state machine
-- [ ] Fix intermittent "404 no servers found" caused by stale SW cache (currently requires manual unregister + refresh)
+- [x] Fix intermittent "404 no servers found" — clear lastActiveServer on app-route navigation, add / and /kvm/ to isAppRoute
 - [ ] Add diagnostic logging for client mapping failures (behind a debug flag)
 
 ### Status Polling
