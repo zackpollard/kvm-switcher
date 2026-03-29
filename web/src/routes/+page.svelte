@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { fetchServers, createSession, createIPMISession, fetchServerStatuses, type ServerInfo, type DeviceStatus } from '$lib/api';
 	import { goto } from '$app/navigation';
-	import { Alert, Badge, Button, LoadingSpinner, Card, CardHeader, CardBody, CardFooter } from '@immich/ui';
+	import { Alert, Badge, Button, LoadingSpinner } from '@immich/ui';
+	import ServerCard from '$lib/components/ServerCard.svelte';
 
 	let servers: ServerInfo[] = $state([]);
 	let statuses: Record<string, DeviceStatus> = $state({});
@@ -154,14 +155,12 @@
 			<span class="ml-3 text-muted">Loading...</span>
 		</div>
 	{:else if servers.length === 0}
-		<Card class="bg-light-50 border border-light-200">
-			<CardBody>
-				<div class="py-10 text-center">
-					<p class="text-muted">No devices configured.</p>
-					<p class="mt-1 text-sm text-muted">Add servers to configs/servers.yaml</p>
-				</div>
-			</CardBody>
-		</Card>
+		<ServerCard>
+			<div class="py-10 text-center">
+				<p class="text-muted">No devices configured.</p>
+				<p class="mt-1 text-sm text-muted">Add servers to configs/servers.yaml</p>
+			</div>
+		</ServerCard>
 	{:else}
 		{#each groupedServers() as group}
 			<div class="mb-8">
@@ -169,8 +168,8 @@
 				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					{#each group.servers as server}
 						{@const st = statuses[server.name]}
-						<Card class="bg-light-50 border border-light-200 transition-colors hover:border-light-400">
-							<CardHeader>
+						<ServerCard>
+							{#snippet header()}
 								<div class="flex items-start justify-between">
 									<div class="flex items-center gap-2">
 										{#if st}
@@ -178,105 +177,99 @@
 										{:else}
 											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
 										{/if}
-										<h3 class="text-lg font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
+										<h3 class="text-base font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
 									</div>
 									<Badge size="tiny" shape="round" class="!bg-light-200 !text-dark">
 										{boardLabel(server.board_type)}
 									</Badge>
 								</div>
-							</CardHeader>
+							{/snippet}
 
-							<CardBody>
-								<!-- Stats -->
-								<div class="space-y-1 text-sm">
-									{#if st?.model}
-										<p class="text-dark">{st.model}</p>
+							<div class="space-y-1 text-sm">
+								{#if st?.model}
+									<p class="text-dark">{st.model}</p>
+								{/if}
+								{#if server.board_type !== 'apc_ups'}
+									{#if st?.power_state}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Power:</span>
+											<span class={st.power_state === 'on' ? 'text-success' : 'text-danger'}>
+												{st.power_state === 'on' ? 'On' : 'Off'}
+											</span>
+											{#if st.load_watts}
+												<span class="text-muted">({st.load_watts}W)</span>
+											{/if}
+										</div>
 									{/if}
-									{#if server.board_type !== 'apc_ups'}
-										<!-- Server stats -->
-										{#if st?.power_state}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Power:</span>
-												<span class={st.power_state === 'on' ? 'text-success' : 'text-danger'}>
-													{st.power_state === 'on' ? 'On' : 'Off'}
-												</span>
-												{#if st.load_watts}
-													<span class="text-muted">({st.load_watts}W)</span>
-												{/if}
-											</div>
-										{/if}
-										{#if st?.health}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Health:</span>
-												<span class={healthColor(st.health)}>{st.health}</span>
-											</div>
-										{/if}
-										{#if st?.temperature_c}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Temp:</span>
-												<span class="text-dark">{st.temperature_c}&deg;C</span>
-											</div>
-										{/if}
-										{#if st?.app_version || st?.image_version}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Version:</span>
-												<span class="text-dark">{st.app_version || ''}</span>
-												{#if st.image_version}
-													<span class="text-muted">({st.image_version})</span>
-												{/if}
-												{#if st.update_available}
-													<Badge size="tiny" color="warning" shape="round">Update</Badge>
-												{/if}
-											</div>
-										{/if}
-									{:else}
-										<!-- APC UPS/PDU stats -->
-										{#if st?.load_watts || st?.load_pct || st?.load_amps}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Load:</span>
-												{#if st.load_watts}<span class="text-dark">{st.load_watts}W</span>{/if}
-												{#if st.load_pct}<span class="text-dark">{st.load_pct}%</span>{/if}
-												{#if st.load_amps}<span class="text-muted">({st.load_amps}A)</span>{/if}
-											</div>
-										{/if}
-										{#if st?.voltage}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Voltage:</span>
-												<span class="text-dark">{st.voltage}V</span>
-											</div>
-										{/if}
-										{#if st?.battery_pct != null && st.battery_pct > 0}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Battery:</span>
-												<span class={st.battery_pct > 50 ? 'text-success' : st.battery_pct > 20 ? 'text-warning' : 'text-danger'}>
-													{st.battery_pct}%
-												</span>
-												{#if st.runtime_min}
-													<span class="text-muted">({st.runtime_min} min)</span>
-												{/if}
-											</div>
-										{/if}
-										{#if st?.temperature_c}
-											<div class="flex items-center gap-2">
-												<span class="text-muted">Temp:</span>
-												<span class="text-dark">{st.temperature_c}&deg;C</span>
-											</div>
-										{/if}
+									{#if st?.health}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Health:</span>
+											<span class={healthColor(st.health)}>{st.health}</span>
+										</div>
 									{/if}
-									{#if !st}
-										<p class="font-mono text-xs text-muted">{server.bmc_ip}</p>
+									{#if st?.temperature_c}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Temp:</span>
+											<span class="text-dark">{st.temperature_c}&deg;C</span>
+										</div>
 									{/if}
-								</div>
-							</CardBody>
+									{#if st?.app_version || st?.image_version}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Version:</span>
+											<span class="text-dark">{st.app_version || ''}</span>
+											{#if st.image_version}
+												<span class="text-muted">({st.image_version})</span>
+											{/if}
+											{#if st.update_available}
+												<Badge size="tiny" color="warning" shape="round">Update</Badge>
+											{/if}
+										</div>
+									{/if}
+								{:else}
+									{#if st?.load_watts || st?.load_pct || st?.load_amps}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Load:</span>
+											{#if st.load_watts}<span class="text-dark">{st.load_watts}W</span>{/if}
+											{#if st.load_pct}<span class="text-dark">{st.load_pct}%</span>{/if}
+											{#if st.load_amps}<span class="text-muted">({st.load_amps}A)</span>{/if}
+										</div>
+									{/if}
+									{#if st?.voltage}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Voltage:</span>
+											<span class="text-dark">{st.voltage}V</span>
+										</div>
+									{/if}
+									{#if st?.battery_pct != null && st.battery_pct > 0}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Battery:</span>
+											<span class={st.battery_pct > 50 ? 'text-success' : st.battery_pct > 20 ? 'text-warning' : 'text-danger'}>
+												{st.battery_pct}%
+											</span>
+											{#if st.runtime_min}
+												<span class="text-muted">({st.runtime_min} min)</span>
+											{/if}
+										</div>
+									{/if}
+									{#if st?.temperature_c}
+										<div class="flex items-center gap-2">
+											<span class="text-muted">Temp:</span>
+											<span class="text-dark">{st.temperature_c}&deg;C</span>
+										</div>
+									{/if}
+								{/if}
+								{#if !st}
+									<p class="font-mono text-xs text-muted">{server.bmc_ip}</p>
+								{/if}
+							</div>
 
-							<CardFooter>
+							{#snippet footer()}
 								<div class="flex w-full items-center justify-between">
 									{#if server.has_active_session}
 										<span class="text-xs text-success">Session active</span>
 									{:else}
 										<span></span>
 									{/if}
-
 									<div class="flex items-center gap-2">
 										<Button
 											onclick={() => openIPMI(server.name)}
@@ -310,8 +303,8 @@
 										{/if}
 									</div>
 								</div>
-							</CardFooter>
-						</Card>
+							{/snippet}
+						</ServerCard>
 					{/each}
 				</div>
 			</div>
