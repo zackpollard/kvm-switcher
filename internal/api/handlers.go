@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/zackpollard/kvm-switcher/internal/auth"
+	"github.com/zackpollard/kvm-switcher/internal/boards"
 	"github.com/zackpollard/kvm-switcher/internal/config"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	vnc "github.com/zackpollard/kvm-switcher/internal/vnc"
@@ -1369,4 +1371,219 @@ func (s *Server) KVMScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(pngData)
+}
+
+// --- Virtual Media endpoints ---
+
+// resolveVirtualMedia is a helper that looks up session -> server config -> board handler
+// and checks whether the board supports virtual media. Returns the config, creds, and
+// VirtualMediaHandler, or writes an error and returns nil.
+func (s *Server) resolveVirtualMedia(w http.ResponseWriter, r *http.Request) (*models.ServerConfig, *models.BMCCredentials, boards.VirtualMediaHandler) {
+	id := r.PathValue("id")
+
+	session, ok := s.Sessions.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return nil, nil, nil
+	}
+
+	// Find server config
+	var serverCfg *models.ServerConfig
+	for i := range s.Config.Servers {
+		if s.Config.Servers[i].Name == session.ServerName {
+			serverCfg = &s.Config.Servers[i]
+			break
+		}
+	}
+	if serverCfg == nil {
+		writeError(w, http.StatusNotFound, "server config not found")
+		return nil, nil, nil
+	}
+
+	// Get BMC credentials: try cached proxy creds first, fall back to ensureBMCSession
+	s.bmcCredsMu.Lock()
+	credEntry := s.BMCCreds[id]
+	s.bmcCredsMu.Unlock()
+
+	var creds *models.BMCCredentials
+	if credEntry != nil {
+		creds = credEntry.Creds
+	} else {
+		var err error
+		creds, err = ensureBMCSession(serverCfg)
+		if err != nil {
+			log.Printf("Virtual media: BMC session for %s failed: %v", session.ServerName, err)
+			writeError(w, http.StatusBadGateway, "BMC authentication failed")
+			return nil, nil, nil
+		}
+	}
+
+	// Check if board supports virtual media
+	handler, ok := boards.Get(serverCfg.BoardType)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unsupported board type")
+		return nil, nil, nil
+	}
+
+	vmHandler, ok := handler.(boards.VirtualMediaHandler)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "virtual media not supported for this board type")
+		return nil, nil, nil
+	}
+
+	return serverCfg, creds, vmHandler
+}
+
+// VirtualMediaMount godoc
+// @Summary Mount virtual media
+// @Description Mounts an ISO image via Redfish Virtual Media on the BMC. The image must be accessible from the BMC via HTTP, HTTPS, NFS, or CIFS.
+// @Tags virtual-media
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID"
+// @Param request body models.VirtualMediaMountRequest true "Mount request with image URL"
+// @Success 200 {object} models.StatusOkResponse "Media mounted"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body or URL scheme"
+// @Failure 404 {object} models.ErrorResponse "Session or server not found"
+// @Failure 500 {object} models.ErrorResponse "Mount failed"
+// @Failure 501 {object} models.ErrorResponse "Virtual media not supported for this board type"
+// @Failure 502 {object} models.ErrorResponse "BMC authentication failed"
+// @Router /api/sessions/{id}/virtual-media/mount [post]
+func (s *Server) VirtualMediaMount(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	serverCfg, creds, vmHandler := s.resolveVirtualMedia(w, r)
+	if vmHandler == nil {
+		return // error already written
+	}
+
+	var req models.VirtualMediaMountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.ImageURL == "" {
+		writeError(w, http.StatusBadRequest, "image_url is required")
+		return
+	}
+
+	// Validate URL scheme
+	parsed, err := url.Parse(req.ImageURL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid image URL")
+		return
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "nfs", "cifs":
+		// allowed
+	default:
+		writeError(w, http.StatusBadRequest, "image_url must use http, https, nfs, or cifs scheme")
+		return
+	}
+
+	if err := vmHandler.MountMedia(serverCfg, creds, req.ImageURL); err != nil {
+		log.Printf("Virtual media mount failed for %s: %v", serverCfg.Name, err)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("mount failed: %v", err))
+		return
+	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("virtual_media_mount", userEmail, serverName, id, ip, map[string]string{"image": req.ImageURL})
+
+	log.Printf("Virtual media mounted on %s: %s (session %s)", serverName, req.ImageURL, id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// VirtualMediaEject godoc
+// @Summary Eject virtual media
+// @Description Ejects any currently mounted virtual media from the BMC.
+// @Tags virtual-media
+// @Produce json
+// @Param id path string true "Session ID"
+// @Success 200 {object} models.StatusOkResponse "Media ejected"
+// @Failure 404 {object} models.ErrorResponse "Session or server not found"
+// @Failure 500 {object} models.ErrorResponse "Eject failed"
+// @Failure 501 {object} models.ErrorResponse "Virtual media not supported for this board type"
+// @Failure 502 {object} models.ErrorResponse "BMC authentication failed"
+// @Router /api/sessions/{id}/virtual-media/eject [post]
+func (s *Server) VirtualMediaEject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	serverCfg, creds, vmHandler := s.resolveVirtualMedia(w, r)
+	if vmHandler == nil {
+		return // error already written
+	}
+
+	if err := vmHandler.EjectMedia(serverCfg, creds); err != nil {
+		log.Printf("Virtual media eject failed for %s: %v", serverCfg.Name, err)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("eject failed: %v", err))
+		return
+	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("virtual_media_eject", userEmail, serverName, id, ip, nil)
+
+	log.Printf("Virtual media ejected on %s (session %s)", serverName, id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// VirtualMediaStatus godoc
+// @Summary Get virtual media status
+// @Description Returns the current virtual media state including whether media is inserted and the image URL.
+// @Tags virtual-media
+// @Produce json
+// @Param id path string true "Session ID"
+// @Success 200 {object} models.VirtualMediaStatus "Virtual media status"
+// @Failure 404 {object} models.ErrorResponse "Session or server not found"
+// @Failure 500 {object} models.ErrorResponse "Status query failed"
+// @Failure 501 {object} models.ErrorResponse "Virtual media not supported for this board type"
+// @Failure 502 {object} models.ErrorResponse "BMC authentication failed"
+// @Router /api/sessions/{id}/virtual-media [get]
+func (s *Server) VirtualMediaStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	serverCfg, creds, vmHandler := s.resolveVirtualMedia(w, r)
+	if vmHandler == nil {
+		return // error already written
+	}
+
+	status, err := vmHandler.GetMediaStatus(serverCfg, creds)
+	if err != nil {
+		log.Printf("Virtual media status failed for %s: %v", serverCfg.Name, err)
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("status query failed: %v", err))
+		return
+	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("virtual_media_status", userEmail, serverName, id, ip, nil)
+
+	writeJSON(w, http.StatusOK, status)
 }

@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, type KVMSession } from '$lib/api';
+	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, getVirtualMediaStatus, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
+	import VirtualMediaPanel from '$lib/components/VirtualMediaPanel.svelte';
 	import { Button, LoadingSpinner, Alert } from '@immich/ui';
 
 	let session: KVMSession | null = $state(null);
@@ -16,6 +17,8 @@
 	let showPowerMenu = $state(false);
 	let showMouseMenu = $state(false);
 	let showKbdMenu = $state(false);
+	let showMediaPanel = $state(false);
+	let mediaSupported = $state(false);
 	let isIKVM = $derived(session?.conn_mode === 'ikvm');
 
 	async function loadSession() {
@@ -150,11 +153,22 @@
 	});
 
 	$effect(() => {
+		if (session?.status === 'connected' && !mediaSupported) {
+			getVirtualMediaStatus(activeSessionId).then((result) => {
+				mediaSupported = result !== null;
+			}).catch(() => {
+				mediaSupported = false;
+			});
+		}
+	});
+
+	$effect(() => {
 		const handleKeydown = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') {
 				showPowerMenu = false;
 				showMouseMenu = false;
 				showKbdMenu = false;
+				showMediaPanel = false;
 			}
 		};
 		document.addEventListener('keydown', handleKeydown);
@@ -272,6 +286,26 @@
 							<button onclick={() => { setKeyboard('es'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-100" role="menuitem">Spanish</button>
 							<button onclick={() => { setKeyboard('jp'); showKbdMenu = false; }} class="block w-full px-3 py-1.5 text-left text-xs text-dark hover:bg-light-100" role="menuitem">Japanese</button>
 						</div>
+					{/if}
+				</div>
+			{/if}
+			{#if mediaSupported}
+				<div class="relative">
+					<Button
+						onclick={() => { showMediaPanel = !showMediaPanel; showPowerMenu = false; showMouseMenu = false; showKbdMenu = false; }}
+						size="tiny"
+						variant="ghost"
+						color="secondary"
+						aria-haspopup="true"
+						aria-expanded={showMediaPanel}
+					>
+						Media
+					</Button>
+					{#if showMediaPanel}
+						<VirtualMediaPanel
+							sessionId={activeSessionId}
+							onunsupported={() => { mediaSupported = false; showMediaPanel = false; }}
+						/>
 					{/if}
 				</div>
 			{/if}

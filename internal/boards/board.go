@@ -41,6 +41,13 @@ type BoardHandler interface {
 	CookiesToStrip() []string
 }
 
+// VirtualMediaHandler is an optional interface for boards that support ISO mounting.
+type VirtualMediaHandler interface {
+	MountMedia(cfg *models.ServerConfig, creds *models.BMCCredentials, imageURL string) error
+	EjectMedia(cfg *models.ServerConfig, creds *models.BMCCredentials) error
+	GetMediaStatus(cfg *models.ServerConfig, creds *models.BMCCredentials) (*models.VirtualMediaStatus, error)
+}
+
 // registry maps board types to their handler implementations.
 var registry = map[string]BoardHandler{}
 

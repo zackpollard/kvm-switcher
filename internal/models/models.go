@@ -256,6 +256,19 @@ type AuditLogger interface {
 	QueryAudit(filter AuditFilter) ([]AuditEntry, error)
 }
 
+// VirtualMediaStatus describes the current state of virtual media.
+type VirtualMediaStatus struct {
+	Inserted       bool   `json:"inserted"`
+	Image          string `json:"image,omitempty"`
+	MediaType      string `json:"media_type,omitempty"` // "CD", "DVD", etc.
+	WriteProtected bool   `json:"write_protected"`
+}
+
+// VirtualMediaMountRequest is the request body for mounting virtual media.
+type VirtualMediaMountRequest struct {
+	ImageURL string `json:"image_url"`
+}
+
 // --- Swagger request/response types for API documentation ---
 
 // PowerControlRequest is the JSON body for POST /api/sessions/{id}/power.

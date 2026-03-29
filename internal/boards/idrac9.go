@@ -3,6 +3,7 @@ package boards
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -144,4 +145,102 @@ func (b *IDRAC9Board) FetchStatus(cfg *models.ServerConfig, creds *models.BMCCre
 	}
 
 	return status
+}
+
+// --- VirtualMediaHandler implementation ---
+
+func (b *IDRAC9Board) MountMedia(cfg *models.ServerConfig, creds *models.BMCCredentials, imageURL string) error {
+	baseURL := BMCBaseURL("dell_idrac9", cfg.BMCIP, cfg.BMCPort)
+	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.InsertMedia"
+
+	body := fmt.Sprintf(`{"Image":"%s"}`, imageURL)
+	req, err := http.NewRequest("POST", url, strings.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("mount request creation failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Auth-Token", creds.CSRFToken)
+
+	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("mount request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("mount failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func (b *IDRAC9Board) EjectMedia(cfg *models.ServerConfig, creds *models.BMCCredentials) error {
+	baseURL := BMCBaseURL("dell_idrac9", cfg.BMCIP, cfg.BMCPort)
+	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD/Actions/VirtualMedia.EjectMedia"
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(`{}`))
+	if err != nil {
+		return fmt.Errorf("eject request creation failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Auth-Token", creds.CSRFToken)
+
+	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("eject request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("eject failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func (b *IDRAC9Board) GetMediaStatus(cfg *models.ServerConfig, creds *models.BMCCredentials) (*models.VirtualMediaStatus, error) {
+	baseURL := BMCBaseURL("dell_idrac9", cfg.BMCIP, cfg.BMCPort)
+	url := baseURL + "/redfish/v1/Managers/iDRAC.Embedded.1/VirtualMedia/CD"
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("status request creation failed: %w", err)
+	}
+	req.Header.Set("X-Auth-Token", creds.CSRFToken)
+
+	client := NewStatusHTTPClient(30*time.Second, tlsutil.SkipVerify(cfg))
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("status request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("status query failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var redfishResp struct {
+		Inserted       bool     `json:"Inserted"`
+		Image          string   `json:"Image"`
+		MediaTypes     []string `json:"MediaTypes"`
+		WriteProtected bool     `json:"WriteProtected"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&redfishResp); err != nil {
+		return nil, fmt.Errorf("failed to parse virtual media response: %w", err)
+	}
+
+	mediaType := ""
+	if len(redfishResp.MediaTypes) > 0 {
+		mediaType = redfishResp.MediaTypes[0]
+	}
+
+	return &models.VirtualMediaStatus{
+		Inserted:       redfishResp.Inserted,
+		Image:          redfishResp.Image,
+		MediaType:      mediaType,
+		WriteProtected: redfishResp.WriteProtected,
+	}, nil
 }

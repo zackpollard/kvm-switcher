@@ -204,6 +204,42 @@ export async function fetchAuditLog(params?: {
 	return res.json();
 }
 
+export interface VirtualMediaStatus {
+	inserted: boolean;
+	image?: string;
+	media_type?: string;
+	write_protected: boolean;
+}
+
+export async function getVirtualMediaStatus(sessionId: string): Promise<VirtualMediaStatus | null> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/virtual-media`);
+	if (res.status === 501) return null; // not supported
+	if (!res.ok) throw new Error('Failed to get virtual media status');
+	return res.json();
+}
+
+export async function mountVirtualMedia(sessionId: string, imageUrl: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/virtual-media/mount`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ image_url: imageUrl })
+	});
+	if (!res.ok) {
+		const data = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(data.error || 'Mount failed');
+	}
+}
+
+export async function ejectVirtualMedia(sessionId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/virtual-media/eject`, {
+		method: 'POST'
+	});
+	if (!res.ok) {
+		const data = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(data.error || 'Eject failed');
+	}
+}
+
 export interface AuthStatus {
 	authenticated: boolean;
 	oidc_enabled?: boolean;
