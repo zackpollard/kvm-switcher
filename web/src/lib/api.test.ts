@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fetchServers, createSession, getSession, deleteSession, keepAliveSession, fetchServerStatuses, kvmPowerControl, kvmResetVideo, kvmDisplayLock, kvmMouseMode, kvmKeyboardLayout, createIPMISession } from './api';
+import { fetchServers, createSession, getSession, deleteSession, keepAliveSession, listSessions, getKVMWebSocketURL, fetchServerStatuses, kvmPowerControl, kvmResetVideo, kvmDisplayLock, kvmMouseMode, kvmKeyboardLayout, createIPMISession } from './api';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -235,5 +235,121 @@ describe('createIPMISession', () => {
 			json: () => Promise.resolve({ error: 'BMC login failed' })
 		});
 		await expect(createIPMISession('server-1')).rejects.toThrow('BMC login failed');
+	});
+});
+
+describe('session management', () => {
+	it('getSession returns full session object with all fields', async () => {
+		const session = {
+			id: 'sess-full',
+			server_name: 'server-2',
+			bmc_ip: '10.0.0.5',
+			status: 'connected',
+			conn_mode: 'ikvm_native',
+			kvm_password: 'secret123',
+			idle_timeout_remaining_seconds: 900,
+			error: undefined,
+			created_at: '2026-03-29T10:00:00Z',
+			last_activity: '2026-03-29T10:05:00Z'
+		};
+		mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(session) });
+
+		const result = await getSession('sess-full');
+		expect(result).toEqual(session);
+		expect(result.id).toBe('sess-full');
+		expect(result.server_name).toBe('server-2');
+		expect(result.bmc_ip).toBe('10.0.0.5');
+		expect(result.status).toBe('connected');
+		expect(result.conn_mode).toBe('ikvm_native');
+		expect(result.kvm_password).toBe('secret123');
+		expect(result.idle_timeout_remaining_seconds).toBe(900);
+		expect(result.error).toBeUndefined();
+		expect(mockFetch).toHaveBeenCalledWith('/api/sessions/sess-full');
+	});
+
+	it('getSession throws on 404', async () => {
+		mockFetch.mockResolvedValue({ ok: false, statusText: 'Not Found' });
+		await expect(getSession('nonexistent')).rejects.toThrow('Failed to get session: Not Found');
+	});
+
+	it('listSessions returns array of sessions', async () => {
+		const sessions = [
+			{ id: 'sess-1', server_name: 'server-1', status: 'connected', bmc_ip: '10.0.0.1', created_at: '2026-03-29T10:00:00Z', last_activity: '2026-03-29T10:05:00Z' },
+			{ id: 'sess-2', server_name: 'server-2', status: 'starting', bmc_ip: '10.0.0.2', created_at: '2026-03-29T10:01:00Z', last_activity: '2026-03-29T10:01:00Z' }
+		];
+		mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(sessions) });
+
+		const result = await listSessions();
+		expect(result).toEqual(sessions);
+		expect(result).toHaveLength(2);
+		expect(mockFetch).toHaveBeenCalledWith('/api/sessions');
+	});
+
+	it('keepAliveSession calls PATCH endpoint', async () => {
+		mockFetch.mockResolvedValue({ ok: true });
+		await keepAliveSession('sess-ka');
+		expect(mockFetch).toHaveBeenCalledWith('/api/sessions/sess-ka/keepalive', { method: 'PATCH' });
+	});
+
+	it('deleteSession calls DELETE endpoint and returns', async () => {
+		mockFetch.mockResolvedValue({ ok: true });
+		const result = await deleteSession('sess-del');
+		expect(result).toBeUndefined();
+		expect(mockFetch).toHaveBeenCalledWith('/api/sessions/sess-del', { method: 'DELETE' });
+	});
+
+	it('createSession returns session with id and status starting', async () => {
+		const session = { id: 'new-sess', server_name: 'server-3', status: 'starting', bmc_ip: '10.0.0.3', created_at: '2026-03-29T11:00:00Z', last_activity: '2026-03-29T11:00:00Z' };
+		mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(session) });
+
+		const result = await createSession('server-3');
+		expect(result.id).toBe('new-sess');
+		expect(result.status).toBe('starting');
+		expect(mockFetch).toHaveBeenCalledWith('/api/sessions', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ server_name: 'server-3' })
+		});
+	});
+
+	it('getKVMWebSocketURL returns ws:// URL for http: protocol', () => {
+		Object.defineProperty(window, 'location', {
+			value: { protocol: 'http:', host: 'localhost:8080' },
+			writable: true,
+			configurable: true
+		});
+		const url = getKVMWebSocketURL('sess-ws');
+		expect(url).toBe('ws://localhost:8080/ws/kvm/sess-ws');
+	});
+
+	it('getKVMWebSocketURL returns wss:// URL for https: protocol', () => {
+		Object.defineProperty(window, 'location', {
+			value: { protocol: 'https:', host: 'kvm.example.com' },
+			writable: true,
+			configurable: true
+		});
+		const url = getKVMWebSocketURL('sess-wss');
+		expect(url).toBe('wss://kvm.example.com/ws/kvm/sess-wss');
+	});
+
+	it('fetchServers returns array of server info objects', async () => {
+		const servers = [
+			{ name: 'srv-a', bmc_ip: '10.0.0.10', bmc_port: 443, board_type: 'ami_megarac', has_active_session: true, active_session_id: 'sess-a' },
+			{ name: 'srv-b', bmc_ip: '10.0.0.11', bmc_port: 80, board_type: 'ami_megarac', has_active_session: false }
+		];
+		mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(servers) });
+
+		const result = await fetchServers();
+		expect(result).toEqual(servers);
+		expect(result).toHaveLength(2);
+		expect(result[0].has_active_session).toBe(true);
+		expect(result[0].active_session_id).toBe('sess-a');
+		expect(result[1].has_active_session).toBe(false);
+		expect(mockFetch).toHaveBeenCalledWith('/api/servers');
+	});
+
+	it('fetchServers 401 triggers an error', async () => {
+		mockFetch.mockResolvedValue({ ok: false, statusText: 'Unauthorized' });
+		await expect(fetchServers()).rejects.toThrow('Failed to fetch servers: Unauthorized');
 	});
 });
