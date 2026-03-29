@@ -57,7 +57,7 @@ test-e2e: ## Run E2E browser tests (requires server running with BMC access)
 # ── Code Generation ──────────────────────────────────────────────────
 
 generate-api: ## Generate OpenAPI spec from code annotations
-	swag init -g cmd/server/main.go -o api --outputTypes yaml
+	$(shell go env GOPATH)/bin/swag init -g cmd/server/main.go -o api --outputTypes yaml
 
 # ── Cleanup ──────────────────────────────────────────────────────────
 
