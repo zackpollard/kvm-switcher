@@ -48,8 +48,8 @@
 
 ### Backend Testing
 - [ ] Integration tests for iKVM bridge (VNC handshake, frame delivery)
-- [ ] Integration tests for VNC bridge (iDRAC TCP connection reuse)
-- [ ] Proxy response rewriting tests (auto-login injection, header stripping)
+- [x] VNC protocol rewriting tests (ServerInit rewrite, SetEncodings filter, CheckOrigin)
+- [x] Proxy response rewriting tests (header stripping, auto-login injection, gzip decompression)
 - [ ] Auth flow integration tests (full login -> session -> BMC proxy cycle)
 
 ### API Documentation
@@ -60,11 +60,11 @@
 ## Security
 
 ### Production Hardening
-- [ ] Configure restrictive CORS origins (currently defaults to allow all)
+- [x] Configure restrictive CORS origins — WebSocket upgraders now check configured origins
 - [ ] Remove InsecureSkipVerify from iDRAC9 WebSocket proxy (add proper CA trust)
 - [ ] Add session cookie rotation on privilege changes
-- [ ] Document and enforce audit log retention/cleanup policy
-- [ ] Rate limit BMC proxy requests (currently only session/auth endpoints are limited)
+- [x] Document and enforce audit log retention/cleanup policy — 90-day default, hourly purge
+- [x] Rate limit BMC proxy requests — 300 RPM default, mutation endpoints also protected
 
 ## Infrastructure
 
