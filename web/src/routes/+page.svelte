@@ -10,6 +10,17 @@
 	let error = $state('');
 	let connecting = $state<string | null>(null);
 	let openingIPMI = $state<string | null>(null);
+	let cardErrors: Record<string, string> = $state({});
+
+	function setCardError(name: string, message: string) {
+		cardErrors[name] = message;
+		setTimeout(() => {
+			if (cardErrors[name] === message) {
+				delete cardErrors[name];
+				cardErrors = cardErrors;
+			}
+		}, 5000);
+	}
 
 	const TYPE_LABELS: Record<string, string> = {
 		ami_megarac: 'Servers',
@@ -86,7 +97,8 @@
 	async function openIPMI(serverName: string) {
 		try {
 			openingIPMI = serverName;
-			error = '';
+			delete cardErrors[serverName];
+			cardErrors = cardErrors;
 			const session = await createIPMISession(serverName);
 
 			if (session.board_type === 'ami_megarac') {
@@ -101,7 +113,7 @@
 
 			window.open(`/ipmi/${serverName}/`, '_blank');
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to open IPMI';
+			setCardError(serverName, e instanceof Error ? e.message : 'Failed to open IPMI');
 		} finally {
 			openingIPMI = null;
 		}
@@ -110,7 +122,8 @@
 	async function connect(serverName: string, existingSessionId?: string) {
 		try {
 			connecting = serverName;
-			error = '';
+			delete cardErrors[serverName];
+			cardErrors = cardErrors;
 			if (existingSessionId) {
 				// Reuse existing session — skip BMC auth, connect instantly
 				goto(`/kvm/${existingSessionId}`);
@@ -119,7 +132,7 @@
 			const session = await createSession(serverName);
 			goto(`/kvm/${session.id}`);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to connect';
+			setCardError(serverName, e instanceof Error ? e.message : 'Failed to connect');
 			connecting = null;
 		}
 	}
@@ -322,7 +335,10 @@
 										{/if}
 									</div>
 								</div>
-							{/snippet}
+							{#if cardErrors[server.name]}
+								<p class="mt-2 text-xs text-danger">{cardErrors[server.name]}</p>
+							{/if}
+						{/snippet}
 						</ServerCard>
 					{/each}
 				</div>
