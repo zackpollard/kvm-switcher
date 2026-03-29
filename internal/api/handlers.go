@@ -641,7 +641,7 @@ func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) 
 		return nil, fmt.Errorf("unsupported board type: %s", cfg.BoardType)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	entry := getOrCreateProxy(cfg, cfg.Name)
@@ -660,27 +660,9 @@ func ensureBMCSession(cfg *models.ServerConfig) (*models.BMCCredentials, error) 
 		entry.setBMCCredentials(nil)
 	}
 
-	var creds *models.BMCCredentials
-	for attempt := 1; attempt <= bmcRetryAttempts; attempt++ {
-		creds, err = authenticator.CreateWebSession(ctx, cfg.BMCIP, cfg.BMCPort, cfg.Username, password)
-		if err == nil {
-			break
-		}
-		if !isTransientError(err) {
-			return nil, fmt.Errorf("BMC auth failed (non-retryable): %w", err)
-		}
-		if attempt < bmcRetryAttempts {
-			log.Printf("BMC session for %s: attempt %d/%d failed (transient): %v — retrying in %v",
-				cfg.Name, attempt, bmcRetryAttempts, err, bmcRetryDelay)
-			select {
-			case <-time.After(bmcRetryDelay):
-			case <-ctx.Done():
-				return nil, fmt.Errorf("BMC auth cancelled during retry: %w", ctx.Err())
-			}
-		}
-	}
+	creds, err := authenticator.CreateWebSession(ctx, cfg.BMCIP, cfg.BMCPort, cfg.Username, password)
 	if err != nil {
-		return nil, fmt.Errorf("BMC auth failed after %d attempts: %w", bmcRetryAttempts, err)
+		return nil, err
 	}
 
 	entry.setBMCCredentials(creds)
@@ -1400,7 +1382,9 @@ func (s *Server) resolveVirtualMedia(w http.ResponseWriter, r *http.Request) (*m
 		return nil, nil, nil
 	}
 
-	// Get BMC credentials: try cached proxy creds first, fall back to ensureBMCSession
+	// Get BMC credentials: try session-scoped creds, then proxy entry cache.
+	// Do NOT call ensureBMCSession here — it logs out and recreates sessions,
+	// which exhausts BMC session slots when polled frequently.
 	s.bmcCredsMu.Lock()
 	credEntry := s.BMCCreds[id]
 	s.bmcCredsMu.Unlock()
@@ -1409,13 +1393,16 @@ func (s *Server) resolveVirtualMedia(w http.ResponseWriter, r *http.Request) (*m
 	if credEntry != nil {
 		creds = credEntry.Creds
 	} else {
-		var err error
-		creds, err = ensureBMCSession(serverCfg)
-		if err != nil {
-			log.Printf("Virtual media: BMC session for %s failed: %v", session.ServerName, err)
-			writeError(w, http.StatusBadGateway, "BMC authentication failed")
-			return nil, nil, nil
+		// Try the proxy entry's cached credentials (from the session manager)
+		entry, ok := bmcProxies.Load(session.ServerName)
+		if ok {
+			creds = entry.(*bmcProxyEntry).getBMCCredentials()
 		}
+	}
+
+	if creds == nil {
+		writeError(w, http.StatusBadGateway, "no BMC credentials available — create a session first")
+		return nil, nil, nil
 	}
 
 	// Check if board supports virtual media
