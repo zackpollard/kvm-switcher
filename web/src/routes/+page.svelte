@@ -138,6 +138,7 @@
 			size="small"
 			variant="outline"
 			color="secondary"
+			shape="semi-round"
 		>
 			Refresh
 		</Button>
@@ -165,103 +166,105 @@
 		{#each groupedServers() as group}
 			<div class="mb-8">
 				<h2 class="mb-4 text-lg font-semibold text-dark">{group.label}</h2>
-				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				<div class="grid items-start gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					{#each group.servers as server}
 						{@const st = statuses[server.name]}
+						{@const hasStats = st?.model || st?.power_state || st?.health || st?.temperature_c || st?.app_version || st?.image_version || st?.load_watts || st?.load_pct || st?.load_amps || st?.voltage || (st?.battery_pct != null && st.battery_pct > 0)}
 						<ServerCard>
 							{#snippet header()}
-								<div class="flex items-start justify-between">
-									<div class="flex items-center gap-2">
+								<div class="flex items-center justify-between gap-3">
+									<div class="flex min-w-0 items-center gap-2">
 										{#if st}
 											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full {st.online ? 'bg-success-500' : 'bg-danger-500'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
 										{:else}
 											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
 										{/if}
-										<h3 class="text-base font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
+										<h3 class="truncate text-base font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
 									</div>
-									<Badge size="tiny" shape="round" class="!bg-light-200 !text-dark">
+									<Badge size="tiny" shape="round" class="shrink-0 !bg-light-200 !text-dark">
 										{boardLabel(server.board_type)}
 									</Badge>
 								</div>
 							{/snippet}
 
-							<div class="space-y-1 text-sm">
-								{#if st?.model}
-									<p class="text-dark">{st.model}</p>
-								{/if}
-								{#if server.board_type !== 'apc_ups'}
-									{#if st?.power_state}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Power:</span>
-											<span class={st.power_state === 'on' ? 'text-success' : 'text-danger'}>
-												{st.power_state === 'on' ? 'On' : 'Off'}
-											</span>
-											{#if st.load_watts}
-												<span class="text-muted">({st.load_watts}W)</span>
+							{#if hasStats}
+								{#snippet body()}
+									<div class="space-y-1 text-sm">
+										{#if st?.model}
+											<p class="text-dark">{st.model}</p>
+										{/if}
+										{#if server.board_type !== 'apc_ups'}
+											{#if st?.power_state}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Power:</span>
+													<span class={st.power_state === 'on' ? 'text-success' : 'text-danger'}>
+														{st.power_state === 'on' ? 'On' : 'Off'}
+													</span>
+													{#if st.load_watts}
+														<span class="text-muted">({st.load_watts}W)</span>
+													{/if}
+												</div>
 											{/if}
-										</div>
-									{/if}
-									{#if st?.health}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Health:</span>
-											<span class={healthColor(st.health)}>{st.health}</span>
-										</div>
-									{/if}
-									{#if st?.temperature_c}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Temp:</span>
-											<span class="text-dark">{st.temperature_c}&deg;C</span>
-										</div>
-									{/if}
-									{#if st?.app_version || st?.image_version}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Version:</span>
-											<span class="text-dark">{st.app_version || ''}</span>
-											{#if st.image_version}
-												<span class="text-muted">({st.image_version})</span>
+											{#if st?.health}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Health:</span>
+													<span class={healthColor(st.health)}>{st.health}</span>
+												</div>
 											{/if}
-											{#if st.update_available}
-												<Badge size="tiny" color="warning" shape="round">Update</Badge>
+											{#if st?.temperature_c}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Temp:</span>
+													<span class="text-dark">{st.temperature_c}&deg;C</span>
+												</div>
 											{/if}
-										</div>
-									{/if}
-								{:else}
-									{#if st?.load_watts || st?.load_pct || st?.load_amps}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Load:</span>
-											{#if st.load_watts}<span class="text-dark">{st.load_watts}W</span>{/if}
-											{#if st.load_pct}<span class="text-dark">{st.load_pct}%</span>{/if}
-											{#if st.load_amps}<span class="text-muted">({st.load_amps}A)</span>{/if}
-										</div>
-									{/if}
-									{#if st?.voltage}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Voltage:</span>
-											<span class="text-dark">{st.voltage}V</span>
-										</div>
-									{/if}
-									{#if st?.battery_pct != null && st.battery_pct > 0}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Battery:</span>
-											<span class={st.battery_pct > 50 ? 'text-success' : st.battery_pct > 20 ? 'text-warning' : 'text-danger'}>
-												{st.battery_pct}%
-											</span>
-											{#if st.runtime_min}
-												<span class="text-muted">({st.runtime_min} min)</span>
+											{#if st?.app_version || st?.image_version}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Version:</span>
+													<span class="text-dark">{st.app_version || ''}</span>
+													{#if st.image_version}
+														<span class="text-muted">({st.image_version})</span>
+													{/if}
+													{#if st.update_available}
+														<Badge size="tiny" color="warning" shape="round">Update</Badge>
+													{/if}
+												</div>
 											{/if}
-										</div>
-									{/if}
-									{#if st?.temperature_c}
-										<div class="flex items-center gap-2">
-											<span class="text-muted">Temp:</span>
-											<span class="text-dark">{st.temperature_c}&deg;C</span>
-										</div>
-									{/if}
-								{/if}
-								{#if !st}
-									<p class="font-mono text-xs text-muted">{server.bmc_ip}</p>
-								{/if}
-							</div>
+										{:else}
+											{#if st?.load_watts || st?.load_pct || st?.load_amps}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Load:</span>
+													{#if st.load_watts}<span class="text-dark">{st.load_watts}W</span>{/if}
+													{#if st.load_pct}<span class="text-dark">{st.load_pct}%</span>{/if}
+													{#if st.load_amps}<span class="text-muted">({st.load_amps}A)</span>{/if}
+												</div>
+											{/if}
+											{#if st?.voltage}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Voltage:</span>
+													<span class="text-dark">{st.voltage}V</span>
+												</div>
+											{/if}
+											{#if st?.battery_pct != null && st.battery_pct > 0}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Battery:</span>
+													<span class={st.battery_pct > 50 ? 'text-success' : st.battery_pct > 20 ? 'text-warning' : 'text-danger'}>
+														{st.battery_pct}%
+													</span>
+													{#if st.runtime_min}
+														<span class="text-muted">({st.runtime_min} min)</span>
+													{/if}
+												</div>
+											{/if}
+											{#if st?.temperature_c}
+												<div class="flex items-center gap-2">
+													<span class="text-muted">Temp:</span>
+													<span class="text-dark">{st.temperature_c}&deg;C</span>
+												</div>
+											{/if}
+										{/if}
+									</div>
+								{/snippet}
+							{/if}
 
 							{#snippet footer()}
 								<div class="flex w-full items-center justify-between">
@@ -277,6 +280,7 @@
 											size="small"
 											variant="outline"
 											color="secondary"
+											shape="semi-round"
 											loading={openingIPMI === server.name}
 										>
 											{#if openingIPMI === server.name}
@@ -292,6 +296,7 @@
 												size="small"
 												variant="filled"
 												color="primary"
+												shape="semi-round"
 												loading={connecting === server.name}
 											>
 												{#if connecting === server.name}
