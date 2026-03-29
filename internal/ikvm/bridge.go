@@ -432,9 +432,9 @@ func (b *Bridge) buildServerInit() []byte {
 	binary.BigEndian.PutUint16(buf[8:10], 255)  // red-max
 	binary.BigEndian.PutUint16(buf[10:12], 255) // green-max
 	binary.BigEndian.PutUint16(buf[12:14], 255) // blue-max
-	buf[14] = 16 // red-shift
+	buf[14] = 0  // red-shift (noVNC expects RGBA byte order)
 	buf[15] = 8  // green-shift
-	buf[16] = 0  // blue-shift
+	buf[16] = 16 // blue-shift
 
 	binary.BigEndian.PutUint32(buf[20:24], uint32(len(name)))
 	copy(buf[24:], name)
@@ -553,11 +553,31 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
 	lastH := b.height
 
 	for {
-		// Wait for a new frame from the BMC
+		// Wait for a frame, then coalesce if more arrive quickly. During
+		// rapid bursts (initial connect, resolution changes), multiple frames
+		// arrive within milliseconds — some with transient decode artifacts
+		// that self-correct in subsequent frames. We wait briefly for the
+		// burst to settle. During normal operation (slow 5s updates), the
+		// short timeout expires immediately and frames are sent with minimal
+		// latency. This matches JViewer's Swing EDT repaint batching.
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-b.frameReady:
+		}
+		// Brief wait to coalesce rapid frames (5ms max additional latency)
+		coalesce := time.NewTimer(5 * time.Millisecond)
+		for coalescing := true; coalescing; {
+			select {
+			case <-b.frameReady:
+				// More frames arriving — reset the timer
+				coalesce.Reset(5 * time.Millisecond)
+			case <-coalesce.C:
+				coalescing = false
+			case <-ctx.Done():
+				coalesce.Stop()
+				return ctx.Err()
+			}
 		}
 
 		b.fbMu.Lock()
@@ -585,9 +605,17 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
 			}
 		}
 
-		// Copy framebuffer while holding lock
-		pixelData := make([]byte, int(w)*int(h)*4)
-		copy(pixelData, fb[:int(w)*int(h)*4])
+		// Copy framebuffer while holding lock, swapping B↔R channels.
+		// The decoder writes BGRA but noVNC expects RGBA (it sends a
+		// SetPixelFormat with red-shift=0 which we accept).
+		size := int(w) * int(h) * 4
+		pixelData := make([]byte, size)
+		for i := 0; i < size; i += 4 {
+			pixelData[i] = fb[i+2]   // R ← byte 2
+			pixelData[i+1] = fb[i+1] // G ← byte 1
+			pixelData[i+2] = fb[i]   // B ← byte 0
+			pixelData[i+3] = fb[i+3] // A ← byte 3
+		}
 		b.fbMu.Unlock()
 
 		if !dirty && !resChanged {
