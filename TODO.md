@@ -42,7 +42,7 @@
 ### Frontend Testing
 - [ ] Auth flow tests (OIDC login/logout, role-based access)
 - [ ] Session management tests (create, reconnect, timeout, disconnect)
-- [ ] Error state tests (BMC unreachable, session expired, network loss)
+- [x] Error state tests (API error paths: power control, session conflicts, IPMI errors)
 - [ ] KVMViewer component tests
 - [ ] Accessibility / responsive design tests
 
