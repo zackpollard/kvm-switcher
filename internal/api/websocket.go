@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 	vncbridge "github.com/zackpollard/kvm-switcher/internal/vnc"
 )
@@ -61,6 +62,14 @@ func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 	session.LastActivity = time.Now()
 	s.Sessions.Set(session)
 
+	// Audit log: connection established
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_connect", userEmail, session.ServerName, sessionID, ip, map[string]string{"conn_mode": string(session.ConnMode)})
+
 	switch session.ConnMode {
 	case models.KVMModeVNC:
 		s.proxyVNC(w, r, session)
@@ -71,6 +80,9 @@ func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "unsupported KVM mode", http.StatusBadRequest)
 	}
+
+	// Audit log: connection ended
+	s.logAudit("kvm_disconnect", userEmail, session.ServerName, sessionID, ip, nil)
 }
 
 // proxyWSS proxies browser WebSocket to a remote WSS endpoint (iDRAC9 HTML5 KVM).

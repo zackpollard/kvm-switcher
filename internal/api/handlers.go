@@ -365,6 +365,14 @@ func (s *Server) KeepAliveSession(w http.ResponseWriter, r *http.Request) {
 	session.LastActivity = time.Now()
 	s.Sessions.Set(session)
 
+	// Audit log
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("session_keepalive", userEmail, session.ServerName, id, ip, nil)
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -824,6 +832,20 @@ func (s *Server) KVMDisplayLock(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_display_lock", userEmail, serverName, id, ip, map[string]any{"lock": req.Lock})
+
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "lock": req.Lock})
 }
 
@@ -841,6 +863,20 @@ func (s *Server) KVMResetVideo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_reset_video", userEmail, serverName, id, ip, nil)
+
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -877,6 +913,20 @@ func (s *Server) KVMMouseMode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_mouse_mode", userEmail, serverName, id, ip, map[string]string{"mode": req.Mode})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": req.Mode})
 }
 
@@ -920,6 +970,20 @@ func (s *Server) KVMKeyboardLayout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_keyboard_layout", userEmail, serverName, id, ip, map[string]string{"layout": req.Layout})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "layout": req.Layout})
 }
 
@@ -949,6 +1013,20 @@ func (s *Server) KVMIPMICommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_ipmi_command", userEmail, serverName, id, ip, map[string]int{"data_length": len(req.Data)})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1036,6 +1114,20 @@ func (s *Server) KVMScreenshot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "no framebuffer available")
 		return
 	}
+
+	// Audit log
+	session, _ := s.Sessions.Get(id)
+	serverName := ""
+	if session != nil {
+		serverName = session.ServerName
+	}
+	userEmail := ""
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	s.logAudit("kvm_screenshot", userEmail, serverName, id, ip, nil)
+
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(pngData)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -27,6 +28,7 @@ type Provider struct {
 	verifier  *gooidc.IDTokenVerifier
 	sessions  map[string]*models.UserSession
 	mu        sync.RWMutex
+	AuditDB   models.AuditLogger // optional audit logging backend
 }
 
 // NewProvider creates and initializes an OIDC provider.
@@ -167,6 +169,17 @@ func (p *Provider) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("OIDC login: %s (%s) with roles %v", user.Email, user.Name, user.Roles)
 
+	// Audit log
+	if p.AuditDB != nil {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		_ = p.AuditDB.LogAudit(models.AuditEntry{
+			EventType:  "auth_login",
+			UserEmail:  user.Email,
+			RemoteAddr: ip,
+			Details:    map[string]any{"email": user.Email, "roles": user.Roles},
+		})
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    sessionID,
@@ -181,10 +194,24 @@ func (p *Provider) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 // HandleLogout clears the session.
 func (p *Provider) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	var userEmail string
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		p.mu.Lock()
+		if sess, ok := p.sessions[cookie.Value]; ok {
+			userEmail = sess.User.Email
+		}
 		delete(p.sessions, cookie.Value)
 		p.mu.Unlock()
+	}
+
+	// Audit log
+	if p.AuditDB != nil {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		_ = p.AuditDB.LogAudit(models.AuditEntry{
+			EventType:  "auth_logout",
+			UserEmail:  userEmail,
+			RemoteAddr: ip,
+		})
 	}
 
 	http.SetCookie(w, &http.Cookie{

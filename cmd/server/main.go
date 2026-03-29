@@ -67,6 +67,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to initialize OIDC provider: %v", err)
 		}
+		oidcProvider.AuditDB = auditLogger
 		log.Printf("OIDC configured with issuer: %s", cfg.OIDC.IssuerURL)
 	}
 
