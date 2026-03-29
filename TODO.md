@@ -47,7 +47,7 @@
 - [ ] Accessibility / responsive design tests
 
 ### Backend Testing
-- [ ] Integration tests for iKVM bridge (VNC handshake, frame delivery)
+- [x] iKVM bridge tests (lifecycle, screenshot BGRA→RGBA, commands, VNC message building, frame tracking)
 - [x] VNC protocol rewriting tests (ServerInit rewrite, SetEncodings filter, CheckOrigin)
 - [x] Proxy response rewriting tests (header stripping, auto-login injection, gzip decompression)
 - [x] Auth flow integration tests (OIDC -> session -> RBAC with 5 sub-tests)
