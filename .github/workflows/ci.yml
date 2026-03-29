@@ -78,16 +78,6 @@ jobs:
             file: Dockerfile
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-          - image: jviewer
-            context: docker/jviewer
-            file: docker/jviewer/Dockerfile
-            platform: linux/amd64
-            runner: ubuntu-latest
-          - image: jviewer
-            context: docker/jviewer
-            file: docker/jviewer/Dockerfile
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 

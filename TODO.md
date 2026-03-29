@@ -69,9 +69,9 @@
 ## Infrastructure
 
 ### CI/CD
-- [ ] GitHub Actions workflow for automated testing on push
-- [ ] Lint checks (golangci-lint, eslint)
-- [ ] Build verification for both backend and frontend
+- [x] GitHub Actions workflow for automated testing on push (ci.yml + publish.yml)
+- [x] Lint checks (gofmt, go vet, svelte-check)
+- [x] Build verification for both backend and frontend
 - [ ] E2E test integration (Playwright against test BMCs or mocks)
 
 ### Docker / Deployment

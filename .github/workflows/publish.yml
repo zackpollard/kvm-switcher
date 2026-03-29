@@ -142,16 +142,6 @@ jobs:
             file: Dockerfile
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-          - image: jviewer
-            context: docker/jviewer
-            file: docker/jviewer/Dockerfile
-            platform: linux/amd64
-            runner: ubuntu-latest
-          - image: jviewer
-            context: docker/jviewer
-            file: docker/jviewer/Dockerfile
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -198,7 +188,7 @@ jobs:
     if: needs.version.outputs.bumped == 'true'
     strategy:
       matrix:
-        image: [kvm-switcher, jviewer]
+        image: [kvm-switcher]
     steps:
       - name: Download digests
         uses: actions/download-artifact@v4
@@ -254,6 +244,5 @@ jobs:
             ## Docker Images
             ```
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/kvm-switcher:${{ needs.version.outputs.new_version }}
-            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/jviewer:${{ needs.version.outputs.new_version }}
             ```
           generate_release_notes: false
