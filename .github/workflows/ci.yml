@@ -70,6 +70,41 @@ jobs:
         run: npm run build
         working-directory: web
 
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Playwright
+        run: cd tests/e2e && npm ci && npx playwright install --with-deps chromium
+
+      - name: Build frontend
+        run: cd web && npm ci && npm run build
+
+      - name: Run E2E tests
+        run: bash tests/e2e/run-ci.sh
+        env:
+          MOCK_BMC_PASSWORD: admin
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: tests/e2e/test-results/
+          retention-days: 7
+
   docker-build:
     name: "Build ${{ matrix.image }} (${{ matrix.platform }})"
     runs-on: ${{ matrix.runner }}

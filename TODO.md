@@ -72,7 +72,7 @@
 - [x] GitHub Actions workflow for automated testing on push (ci.yml + publish.yml)
 - [x] Lint checks (gofmt, go vet, svelte-check)
 - [x] Build verification for both backend and frontend
-- [ ] E2E test integration (Playwright against test BMCs or mocks)
+- [x] E2E test integration (Playwright + mock BMC server, CI workflow)
 
 ### Docker / Deployment
 - [x] Multi-arch Docker image (ARM + amd64 via publish.yml with native runners)

@@ -1,0 +1,21 @@
+servers:
+  - name: mock-megarac
+    bmc_ip: "127.0.0.1"
+    bmc_port: 9999
+    board_type: ami_megarac
+    username: admin
+    credential_env: MOCK_BMC_PASSWORD
+
+  - name: mock-idrac
+    bmc_ip: "127.0.0.1"
+    bmc_port: 9998
+    board_type: dell_idrac8
+    username: root
+    credential_env: MOCK_BMC_PASSWORD
+    tls_skip_verify: true
+
+settings:
+  listen_address: "127.0.0.1:8081"
+  cors_origins: ["*"]
+  db_path: ":memory:"
+  audit_log: true

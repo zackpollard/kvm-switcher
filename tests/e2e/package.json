@@ -5,7 +5,8 @@
   "scripts": {
     "test": "npx playwright test",
     "test:idrac8": "npx playwright test ipmi-idrac8",
-    "test:idrac9": "npx playwright test ipmi-idrac9"
+    "test:idrac9": "npx playwright test ipmi-idrac9",
+    "test:ci": "npx playwright test ci.spec.ts --project=ci"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0"
