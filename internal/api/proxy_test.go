@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1014,5 +1016,137 @@ func TestHandleBMCProxy_MegaRAC_LogoutIntercept(t *testing.T) {
 	// Credentials should still be cached (not invalidated)
 	if creds := entry.getBMCCredentials(); creds == nil || creds.SessionCookie != "megarac-session-123" {
 		t.Error("credentials should still be cached after intercepted logout")
+	}
+}
+
+// --- Proxy response rewriting tests ---
+
+func TestHandleBMCProxy_HeaderStripping(t *testing.T) {
+	// Mock BMC that returns restrictive headers the proxy should strip
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Disposition", "attachment; filename=page.html")
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><body>Secured Page</body></html>`)
+	})
+	bmc := httptest.NewServer(mux)
+	defer bmc.Close()
+
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	if v := w.Header().Get("Content-Security-Policy"); v != "" {
+		t.Errorf("Content-Security-Policy should be stripped, got %q", v)
+	}
+	if v := w.Header().Get("X-Frame-Options"); v != "" {
+		t.Errorf("X-Frame-Options should be stripped, got %q", v)
+	}
+	if v := w.Header().Get("Content-Disposition"); v != "" {
+		t.Errorf("Content-Disposition should be stripped, got %q", v)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Secured Page") {
+		t.Errorf("unexpected body: %s", body)
+	}
+}
+
+func TestHandleBMCProxy_AutoLoginHeader(t *testing.T) {
+	bmc := newMockBMC(t)
+	defer bmc.Close()
+	srv := newTestBMCServer(t, bmc)
+
+	// With credentials: X-KVM-AutoLogin should be "true"
+	entry := getOrCreateProxy(&srv.Config.Servers[0], "test-bmc")
+	entry.setBMCCredentials(&models.BMCCredentials{
+		SessionCookie: "auto-login-session",
+		CSRFToken:     "auto-login-csrf",
+	})
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/", nil)
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	if v := w.Header().Get("X-KVM-AutoLogin"); v != "true" {
+		t.Errorf("X-KVM-AutoLogin = %q, want %q (credentials present)", v, "true")
+	}
+
+	// Without credentials: X-KVM-AutoLogin should be absent
+	entry.setBMCCredentials(nil)
+
+	// Clear and recreate proxy to ensure no stale state
+	bmcProxies.Delete("test-bmc")
+	srv2 := newTestBMCServer(t, bmc)
+
+	req2 := httptest.NewRequest("GET", "/__bmc/test-bmc/", nil)
+	w2 := httptest.NewRecorder()
+	srv2.HandleBMCProxy(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w2.Code)
+	}
+
+	if v := w2.Header().Get("X-KVM-AutoLogin"); v != "" {
+		t.Errorf("X-KVM-AutoLogin = %q, want empty (no credentials)", v)
+	}
+}
+
+func TestHandleBMCProxy_GzipDecompression(t *testing.T) {
+	plainBody := `{"message":"hello from gzipped BMC"}`
+
+	// Mock BMC that returns gzip-encoded content
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/data", func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		gz.Write([]byte(plainBody))
+		gz.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Write(buf.Bytes())
+	})
+	bmc := httptest.NewServer(mux)
+	defer bmc.Close()
+
+	srv := newTestBMCServer(t, bmc)
+
+	req := httptest.NewRequest("GET", "/__bmc/test-bmc/api/data", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	srv.HandleBMCProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	// Content-Encoding should be removed after decompression
+	if v := w.Header().Get("Content-Encoding"); v != "" {
+		t.Errorf("Content-Encoding = %q, want empty (proxy should decompress)", v)
+	}
+
+	// Body should be readable plain text
+	body := w.Body.String()
+	if body != plainBody {
+		t.Errorf("body = %q, want %q", body, plainBody)
+	}
+
+	// Content-Length should match the decompressed size
+	cl := w.Header().Get("Content-Length")
+	if cl != fmt.Sprintf("%d", len(plainBody)) {
+		t.Errorf("Content-Length = %q, want %q", cl, fmt.Sprintf("%d", len(plainBody)))
 	}
 }
