@@ -179,7 +179,7 @@
 										{:else}
 											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
 										{/if}
-										<h3 class="truncate text-base font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
+										<h3 class="truncate text-base font-semibold text-dark">{server.name} <span class="font-mono text-xs font-normal text-muted">{server.bmc_ip}</span></h3>
 									</div>
 									<span class="shrink-0 text-xs text-muted">
 										{boardLabel(server.board_type)}
