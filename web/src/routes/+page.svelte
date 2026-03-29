@@ -170,21 +170,18 @@
 						{@const st = statuses[server.name]}
 						<ServerCard>
 							{#snippet header()}
-								<div class="flex items-start justify-between gap-3">
-									<div class="flex min-w-0 gap-2">
-										<div class="mt-1.5 shrink-0">
-											{#if st}
-												<span class="inline-block h-2.5 w-2.5 rounded-full {st.online ? 'bg-success-500' : 'bg-danger-500'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
-											{:else}
-												<span class="inline-block h-2.5 w-2.5 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
-											{/if}
-										</div>
-										<div class="min-w-0">
-											<h3 class="truncate text-base font-semibold text-dark">{server.name}</h3>
-											<p class="font-mono text-xs text-muted">{server.bmc_ip}</p>
-										</div>
+								<div class="flex items-center justify-between gap-3">
+									<div class="flex min-w-0 items-center gap-2">
+										{#if st}
+											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full {st.online ? 'bg-success-500' : 'bg-danger-500'}" title="{st.online ? 'Online' : 'Offline'}" aria-label="{st.online ? 'Online' : 'Offline'}" role="img"></span>
+										{:else}
+											<span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-light-400" title="Unknown" aria-label="Status unknown" role="img"></span>
+										{/if}
+										<h3 class="truncate text-base font-semibold text-dark">{server.name}</h3>
+										<span class="text-light-300">|</span>
+										<span class="shrink-0 font-mono text-xs text-muted">{server.bmc_ip}</span>
 									</div>
-									<span class="mt-0.5 shrink-0 text-xs text-muted">
+									<span class="shrink-0 text-xs text-muted">
 										{boardLabel(server.board_type)}
 									</span>
 								</div>
