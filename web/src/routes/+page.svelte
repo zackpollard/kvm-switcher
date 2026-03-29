@@ -181,9 +181,9 @@
 										{/if}
 										<h3 class="truncate text-base font-semibold text-dark">{server.name} <span class="text-sm font-normal text-muted">{server.bmc_ip}</span></h3>
 									</div>
-									<Badge size="tiny" shape="round" class="shrink-0 !bg-light-200 !text-dark">
+									<span class="shrink-0 text-xs text-muted">
 										{boardLabel(server.board_type)}
-									</Badge>
+									</span>
 								</div>
 							{/snippet}
 
