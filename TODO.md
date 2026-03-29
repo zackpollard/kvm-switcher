@@ -27,15 +27,15 @@
 - [x] Add diagnostic logging for client mapping failures (DEBUG flag, 8 console.debug calls)
 
 ### Status Polling
-- [ ] Add staleness indicators in the UI (e.g. "last updated 2m ago")
+- [x] Add staleness indicators in the UI ("Updated Xs ago", yellow when stale >60s)
 - [x] Log circuit breaker recovery events (open/half-open -> closed transitions)
-- [ ] Per-server configurable polling intervals
-- [ ] Expose status fetch errors to the frontend instead of silently failing
+- [x] Per-server configurable polling intervals (poll_interval_seconds, default 30)
+- [x] Expose status fetch errors to the frontend (error field on DeviceStatus)
 
 ### Error Handling
-- [ ] Surface proxy errors to the user (currently logged server-side only)
+- [x] Surface proxy errors to the user (styled HTML error page with retry button)
 - [ ] Better feedback when BMC web UI fails to load (instead of blank iframe)
-- [ ] Retry logic for transient BMC authentication failures
+- [x] Retry logic for transient BMC authentication failures (3 attempts, 2s backoff)
 
 ## Code Quality
 
