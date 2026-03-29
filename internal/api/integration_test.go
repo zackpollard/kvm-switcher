@@ -15,6 +15,7 @@ import (
 
 	"github.com/zackpollard/kvm-switcher/internal/boards"
 	"github.com/zackpollard/kvm-switcher/internal/models"
+	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
 
 // ---------------------------------------------------------------------------
@@ -1574,4 +1575,236 @@ func TestIntegration_GitHubVersionCheck(t *testing.T) {
 	if requestCount.Load() != 2 {
 		t.Errorf("request count = %d, want 2 (cache should have expired)", requestCount.Load())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// TestIntegration_OIDCProtectedAPIRoutes
+// ---------------------------------------------------------------------------
+
+// TestIntegration_OIDCProtectedAPIRoutes tests the full OIDC -> session -> RBAC
+// cycle using a real httptest.Server with the OIDC middleware wired in the same
+// way as production (outer mux delegates /api/ to inner mux wrapped by
+// oidcProvider.Middleware).
+//
+// It validates:
+//  1. Unauthenticated GET /api/servers returns 401.
+//  2. Authenticated GET /api/servers returns 200 with RBAC-filtered list.
+//  3. RBAC: "ops" role only sees servers mapped to it (not all configured servers).
+//  4. GET /auth/me with valid session returns authenticated=true.
+//  5. GET /auth/me without session returns authenticated=false.
+func TestIntegration_OIDCProtectedAPIRoutes(t *testing.T) {
+	// -- Config: 3 servers, OIDC with role mappings --
+	oidcCfg := models.OIDCConfig{
+		Enabled:   true,
+		RoleClaim: "groups",
+		RoleMappings: map[string]*models.RoleMapping{
+			"admin": {Servers: []string{"*"}},
+			"ops":   {Servers: []string{"surge", "brock"}},
+			"dev":   {Servers: []string{"brock"}},
+		},
+	}
+
+	appCfg := &models.AppConfig{
+		Servers: []models.ServerConfig{
+			{Name: "surge", BMCIP: "10.0.0.1", BMCPort: 80, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS1"},
+			{Name: "brock", BMCIP: "10.0.0.2", BMCPort: 80, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS2"},
+			{Name: "misty", BMCIP: "10.0.0.3", BMCPort: 80, BoardType: "ami_megarac", Username: "admin", CredentialEnv: "PASS3"},
+		},
+		Settings: models.Settings{MaxConcurrentSessions: 4},
+		OIDC:     oidcCfg,
+	}
+
+	apiSrv := newServerCore(appCfg)
+
+	// -- Pre-populated OIDC sessions --
+	opsSession := &models.UserSession{
+		ID: "ops-session-token",
+		User: &models.UserInfo{
+			Email: "ops-user@example.com",
+			Name:  "Ops User",
+			Roles: []string{"ops"},
+		},
+	}
+	adminSession := &models.UserSession{
+		ID: "admin-session-token",
+		User: &models.UserInfo{
+			Email: "admin@example.com",
+			Name:  "Admin User",
+			Roles: []string{"admin"},
+		},
+	}
+
+	sessions := map[string]*models.UserSession{
+		opsSession.ID:   opsSession,
+		adminSession.ID: adminSession,
+	}
+
+	oidcProvider := kvmoidc.NewTestProvider(&oidcCfg, sessions)
+
+	// -- Wire mux exactly like production --
+	outerMux := http.NewServeMux()
+
+	// /auth/me is outside the OIDC middleware (always available)
+	outerMux.HandleFunc("GET /auth/me", oidcProvider.HandleMe)
+
+	// Inner mux with API routes
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("GET /api/servers", apiSrv.ListServers)
+
+	// Wrap inner mux with OIDC middleware
+	protected := oidcProvider.Middleware(apiMux)
+	outerMux.Handle("/api/", protected)
+
+	ts := httptest.NewServer(outerMux)
+	t.Cleanup(ts.Close)
+
+	client := ts.Client()
+
+	// ---------------------------------------------------------------
+	// Sub-test 1: Unauthenticated GET /api/servers returns 401
+	// ---------------------------------------------------------------
+	t.Run("unauthenticated_api_returns_401", func(t *testing.T) {
+		resp, err := client.Get(ts.URL + "/api/servers")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusUnauthorized {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, http.StatusUnauthorized, body)
+		}
+	})
+
+	// ---------------------------------------------------------------
+	// Sub-test 2: Authenticated ops user sees only surge and brock
+	// ---------------------------------------------------------------
+	t.Run("ops_user_sees_only_mapped_servers", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/servers", nil)
+		req.AddCookie(&http.Cookie{Name: "kvm_session", Value: "ops-session-token"})
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, http.StatusOK, body)
+		}
+
+		var servers []ServerInfo
+		if err := json.NewDecoder(resp.Body).Decode(&servers); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if len(servers) != 2 {
+			t.Fatalf("ops user should see 2 servers, got %d: %+v", len(servers), servers)
+		}
+
+		nameSet := make(map[string]bool)
+		for _, s := range servers {
+			nameSet[s.Name] = true
+		}
+		if !nameSet["surge"] {
+			t.Error("ops user should see 'surge'")
+		}
+		if !nameSet["brock"] {
+			t.Error("ops user should see 'brock'")
+		}
+		if nameSet["misty"] {
+			t.Error("ops user should NOT see 'misty'")
+		}
+	})
+
+	// ---------------------------------------------------------------
+	// Sub-test 3: Admin user sees all 3 servers (wildcard)
+	// ---------------------------------------------------------------
+	t.Run("admin_user_sees_all_servers", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/servers", nil)
+		req.AddCookie(&http.Cookie{Name: "kvm_session", Value: "admin-session-token"})
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, http.StatusOK, body)
+		}
+
+		var servers []ServerInfo
+		if err := json.NewDecoder(resp.Body).Decode(&servers); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if len(servers) != 3 {
+			t.Fatalf("admin user should see 3 servers, got %d", len(servers))
+		}
+	})
+
+	// ---------------------------------------------------------------
+	// Sub-test 4: GET /auth/me with valid session -> authenticated=true
+	// ---------------------------------------------------------------
+	t.Run("auth_me_with_session_returns_authenticated", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", ts.URL+"/auth/me", nil)
+		req.AddCookie(&http.Cookie{Name: "kvm_session", Value: "ops-session-token"})
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		var meResp map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&meResp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if meResp["authenticated"] != true {
+			t.Errorf("authenticated = %v, want true", meResp["authenticated"])
+		}
+		if meResp["email"] != "ops-user@example.com" {
+			t.Errorf("email = %v, want ops-user@example.com", meResp["email"])
+		}
+		if meResp["name"] != "Ops User" {
+			t.Errorf("name = %v, want Ops User", meResp["name"])
+		}
+
+		roles, ok := meResp["roles"].([]interface{})
+		if !ok || len(roles) != 1 || roles[0] != "ops" {
+			t.Errorf("roles = %v, want [ops]", meResp["roles"])
+		}
+	})
+
+	// ---------------------------------------------------------------
+	// Sub-test 5: GET /auth/me without session -> authenticated=false
+	// ---------------------------------------------------------------
+	t.Run("auth_me_without_session_returns_unauthenticated", func(t *testing.T) {
+		resp, err := client.Get(ts.URL + "/auth/me")
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+
+		var meResp map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&meResp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if meResp["authenticated"] != false {
+			t.Errorf("authenticated = %v, want false", meResp["authenticated"])
+		}
+	})
 }
