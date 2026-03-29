@@ -292,10 +292,28 @@ async function proxyToBMC(request, name, path) {
 		// Return a proper error response instead of rejecting the promise.
 		// A rejected respondWith() causes the browser to fall back to network,
 		// which would serve the SPA index.html and potentially cause a reload loop.
-		return new Response('BMC unreachable: ' + err.message, {
+		const errorHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BMC Unreachable</title>' +
+			'<style>' +
+			'*{margin:0;padding:0;box-sizing:border-box}' +
+			'body{background:#0f172a;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}' +
+			'.card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:2.5rem;max-width:480px;width:90%;text-align:center}' +
+			'h1{font-size:1.5rem;color:#f87171;margin-bottom:0.5rem}' +
+			'.msg{color:#94a3b8;font-size:0.95rem;margin-bottom:1.5rem;word-break:break-word}' +
+			'.actions{display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap}' +
+			'button,a{font-size:0.95rem;padding:0.6rem 1.25rem;border-radius:8px;cursor:pointer;text-decoration:none;font-weight:500;transition:background 0.15s}' +
+			'button{background:#3b82f6;color:#fff;border:none}button:hover{background:#2563eb}' +
+			'a{background:#334155;color:#e2e8f0}a:hover{background:#475569}' +
+			'</style></head><body><div class="card">' +
+			'<h1>BMC Unreachable</h1>' +
+			'<p class="msg">' + err.message.replace(/[<>&"]/g, function(c) { return '&#' + c.charCodeAt(0) + ';'; }) + '</p>' +
+			'<div class="actions">' +
+			'<button onclick="location.reload()">Retry</button>' +
+			'<a href="/">Back to Dashboard</a>' +
+			'</div></div></body></html>';
+		return new Response(errorHtml, {
 			status: 502,
 			statusText: 'Bad Gateway',
-			headers: { 'Content-Type': 'text/plain' }
+			headers: { 'Content-Type': 'text/html' }
 		});
 	}
 }
