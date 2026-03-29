@@ -1,4 +1,4 @@
-// Service Worker for IPMI BMC proxy
+// Service Worker for IPMI BMC proxy — v2
 // Intercepts requests from BMC pages and rewrites them to /__bmc/{name}/...
 
 const clientServerMap = new Map(); // clientId -> serverName
