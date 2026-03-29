@@ -3,6 +3,7 @@ package ikvm
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 // Logger is the interface used for diagnostic logging within the ikvm package.
@@ -10,6 +11,17 @@ import (
 type Logger interface {
 	Printf(format string, v ...any)
 }
+
+// WebSocketConn abstracts a WebSocket connection for the VNC bridge.
+// *gorilla/websocket.Conn satisfies this interface.
+type WebSocketConn interface {
+	ReadMessage() (messageType int, p []byte, err error)
+	WriteMessage(messageType int, data []byte) error
+	SetReadDeadline(t time.Time) error
+}
+
+// WebSocket message type for binary data. Matches gorilla/websocket.BinaryMessage.
+const WSBinaryMessage = 2
 
 // IVTP (iKVM Video Transfer Protocol) packet header.
 // All fields are little-endian, 8 bytes total.

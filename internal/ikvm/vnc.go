@@ -5,17 +5,15 @@ import (
 	"encoding/binary"
 	"fmt"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // vncHandshake performs the RFB protocol handshake over WebSocket.
-func (b *Bridge) vncHandshake(ws *websocket.Conn) error {
+func (b *Bridge) vncHandshake(ws WebSocketConn) error {
 	ws.SetReadDeadline(time.Now().Add(30 * time.Second))
 	defer ws.SetReadDeadline(time.Time{})
 
 	// 1. Server -> Client: ProtocolVersion
-	if err := ws.WriteMessage(websocket.BinaryMessage, []byte("RFB 003.008\n")); err != nil {
+	if err := ws.WriteMessage(WSBinaryMessage, []byte("RFB 003.008\n")); err != nil {
 		return fmt.Errorf("sending version: %w", err)
 	}
 
@@ -25,7 +23,7 @@ func (b *Bridge) vncHandshake(ws *websocket.Conn) error {
 	}
 
 	// 3. Server -> Client: Security types (None only)
-	if err := ws.WriteMessage(websocket.BinaryMessage, []byte{1, 1}); err != nil {
+	if err := ws.WriteMessage(WSBinaryMessage, []byte{1, 1}); err != nil {
 		return fmt.Errorf("sending security types: %w", err)
 	}
 
@@ -35,7 +33,7 @@ func (b *Bridge) vncHandshake(ws *websocket.Conn) error {
 	}
 
 	// 5. Server -> Client: SecurityResult (0 = OK)
-	if err := ws.WriteMessage(websocket.BinaryMessage, make([]byte, 4)); err != nil {
+	if err := ws.WriteMessage(WSBinaryMessage, make([]byte, 4)); err != nil {
 		return fmt.Errorf("sending security result: %w", err)
 	}
 
@@ -45,7 +43,7 @@ func (b *Bridge) vncHandshake(ws *websocket.Conn) error {
 	}
 
 	// 7. Server -> Client: ServerInit
-	if err := ws.WriteMessage(websocket.BinaryMessage, b.buildServerInit()); err != nil {
+	if err := ws.WriteMessage(WSBinaryMessage, b.buildServerInit()); err != nil {
 		return fmt.Errorf("sending ServerInit: %w", err)
 	}
 
@@ -79,7 +77,7 @@ func (b *Bridge) buildServerInit() []byte {
 }
 
 // readVNCInput reads VNC client messages (keyboard/mouse) and forwards to BMC.
-func (b *Bridge) readVNCInput(ctx context.Context, ws *websocket.Conn) error {
+func (b *Bridge) readVNCInput(ctx context.Context, ws WebSocketConn) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,9 +89,6 @@ func (b *Bridge) readVNCInput(ctx context.Context, ws *websocket.Conn) error {
 		// noVNC sends FramebufferUpdateRequests and mouse/key events; idle periods are normal.
 		_, data, err := ws.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil
-			}
 			return fmt.Errorf("WS read: %w", err)
 		}
 		if len(data) == 0 {
@@ -185,7 +180,7 @@ func (b *Bridge) handlePointerEvent(data []byte) {
 }
 
 // sendVNCFrames sends VNC FramebufferUpdate messages when new frames arrive.
-func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
+func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn) error {
 	lastW := b.width
 	lastH := b.height
 
@@ -262,7 +257,7 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
 		// Send DesktopSize if resolution changed
 		if resChanged {
 			resizeMsg := buildDesktopResize(w, h)
-			if err := ws.WriteMessage(websocket.BinaryMessage, resizeMsg); err != nil {
+			if err := ws.WriteMessage(WSBinaryMessage, resizeMsg); err != nil {
 				return fmt.Errorf("WS write resize: %w", err)
 			}
 			b.log.Printf("iKVM bridge: resolution changed to %dx%d", w, h)
@@ -271,7 +266,7 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws *websocket.Conn) error {
 
 		// Send FramebufferUpdate with Raw encoding
 		msg := buildFramebufferUpdate(0, 0, w, h, pixelData)
-		if err := ws.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+		if err := ws.WriteMessage(WSBinaryMessage, msg); err != nil {
 			return fmt.Errorf("WS write frame: %w", err)
 		}
 	}

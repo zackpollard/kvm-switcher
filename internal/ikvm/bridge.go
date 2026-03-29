@@ -9,8 +9,6 @@ import (
 	"log"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // Bridge connects noVNC WebSocket clients to a BMC via the native IVTP protocol.
@@ -243,7 +241,7 @@ func (b *Bridge) Stop() {
 // Blocks until the WebSocket closes or the bridge context is cancelled.
 // Multiple clients can be served over the bridge's lifetime (sequentially
 // or concurrently).
-func (b *Bridge) ServeWebSocket(ws *websocket.Conn) error {
+func (b *Bridge) ServeWebSocket(ws WebSocketConn) error {
 	if !b.Running() {
 		return fmt.Errorf("bridge not running")
 	}
@@ -281,7 +279,7 @@ func (b *Bridge) ServeWebSocket(ws *websocket.Conn) error {
 		}
 		b.fbMu.Unlock()
 		msg := buildFramebufferUpdate(0, 0, w, h, pixelData)
-		ws.WriteMessage(websocket.BinaryMessage, msg)
+		ws.WriteMessage(WSBinaryMessage, msg)
 	} else {
 		b.fbMu.Unlock()
 	}
