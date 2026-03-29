@@ -172,6 +172,36 @@ export async function fetchServerStatuses(): Promise<Record<string, DeviceStatus
 	return res.json();
 }
 
+export interface AuditEntry {
+	id: number;
+	timestamp: string;
+	event_type: string;
+	user_email?: string;
+	server_name?: string;
+	session_id?: string;
+	remote_addr?: string;
+	details?: any;
+}
+
+export async function fetchAuditLog(params?: {
+	event_type?: string;
+	server_name?: string;
+	user_email?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<AuditEntry[]> {
+	const query = new URLSearchParams();
+	if (params?.event_type) query.set('event_type', params.event_type);
+	if (params?.server_name) query.set('server_name', params.server_name);
+	if (params?.user_email) query.set('user_email', params.user_email);
+	if (params?.limit) query.set('limit', String(params.limit));
+	if (params?.offset) query.set('offset', String(params.offset));
+	const qs = query.toString();
+	const res = await fetch(`${API_BASE}/audit-log${qs ? '?' + qs : ''}`);
+	if (!res.ok) throw new Error('Failed to fetch audit log');
+	return res.json();
+}
+
 export interface AuthStatus {
 	authenticated: boolean;
 	oidc_enabled?: boolean;

@@ -47,6 +47,7 @@
 				</a>
 
 				<div class="flex items-center gap-3">
+					<a href="/audit" class="text-sm text-muted hover:text-dark transition-colors">Audit Log</a>
 					<ThemeSwitcher size="small" />
 
 					{#if auth?.authenticated}
