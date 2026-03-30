@@ -35,8 +35,8 @@ func TestOpen_CreatesAndMigrates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("schema_version query: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("schema_version rows = %d, want 2", count)
+	if count != 3 {
+		t.Errorf("schema_version rows = %d, want 3", count)
 	}
 }
 

@@ -98,6 +98,17 @@ func (db *DB) migrate() error {
 			);
 			CREATE INDEX idx_sessions_status ON kvm_sessions(status);
 		`},
+		{3, `
+			CREATE TABLE IF NOT EXISTS iso_files (
+				id          INTEGER PRIMARY KEY AUTOINCREMENT,
+				filename    TEXT NOT NULL UNIQUE,
+				size_bytes  INTEGER NOT NULL,
+				sha256      TEXT,
+				uploaded_by TEXT,
+				uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
+				last_used   TEXT
+			);
+		`},
 	}
 
 	for _, m := range migrations {

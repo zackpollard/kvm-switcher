@@ -20,9 +20,10 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/boards"
 	"github.com/zackpollard/kvm-switcher/internal/config"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
-	vnc "github.com/zackpollard/kvm-switcher/internal/vnc"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
+	"github.com/zackpollard/kvm-switcher/internal/store"
+	vnc "github.com/zackpollard/kvm-switcher/internal/vnc"
 
 	"github.com/google/uuid"
 )
@@ -35,6 +36,7 @@ type Server struct {
 	bmcCredsMu  sync.Mutex
 	StatusCache *StatusCache
 	AuditDB     models.AuditLogger // optional audit logging backend
+	DB          *store.DB          // SQLite database (for ISO library, etc.)
 	Bridges      map[string]*ikvm.Bridge        // active iKVM bridges by session ID
 	bridgesMu    sync.Mutex
 	VNCBridges   map[string]*vnc.Bridge         // active VNC bridges by session ID
@@ -50,7 +52,7 @@ func NewServer(cfg *models.AppConfig) *Server {
 }
 
 // NewServerWithStore creates a new API server with a custom session store and starts background pollers.
-func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInterface, auditDB models.AuditLogger) *Server {
+func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInterface, auditDB models.AuditLogger, db *store.DB) *Server {
 	sc := NewStatusCache()
 	srv := &Server{
 		Config:      cfg,
@@ -60,6 +62,7 @@ func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInter
 		VNCBridges: make(map[string]*vnc.Bridge),
 		StatusCache: sc,
 		AuditDB:     auditDB,
+		DB:          db,
 	}
 	StartSessionManager(cfg.Servers, srv.StatusCache)
 	StartStatusPoller(cfg.Servers, srv.StatusCache)

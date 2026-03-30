@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button, LoadingSpinner } from '@immich/ui';
-	import { getVirtualMediaStatus, mountVirtualMedia, ejectVirtualMedia, type VirtualMediaStatus } from '$lib/api';
+	import { getVirtualMediaStatus, mountVirtualMedia, ejectVirtualMedia, fetchISOs, mountLocalISO, type VirtualMediaStatus, type ISOFile } from '$lib/api';
 
 	interface Props {
 		sessionId: string;
@@ -16,6 +16,10 @@
 	let error = $state('');
 	let initialLoading = $state(true);
 
+	let libraryISOs: ISOFile[] = $state([]);
+	let selectedISO = $state('');
+	let libraryLoading = $state(false);
+
 	async function fetchStatus() {
 		try {
 			const result = await getVirtualMediaStatus(sessionId);
@@ -30,6 +34,35 @@
 			error = e instanceof Error ? e.message : 'Failed to fetch status';
 		} finally {
 			initialLoading = false;
+		}
+	}
+
+	async function loadLibraryISOs() {
+		try {
+			const result = await fetchISOs();
+			libraryISOs = result.isos;
+			if (libraryISOs.length > 0 && !selectedISO) {
+				selectedISO = libraryISOs[0].filename;
+			}
+		} catch {
+			// Silently fail — library is supplementary
+		}
+	}
+
+	async function handleMountLibrary() {
+		if (!selectedISO || loading) return;
+		loading = true;
+		libraryLoading = true;
+		error = '';
+		try {
+			await mountLocalISO(sessionId, selectedISO);
+			await fetchStatus();
+			selectedISO = '';
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Mount from library failed';
+		} finally {
+			loading = false;
+			libraryLoading = false;
 		}
 	}
 
@@ -65,6 +98,7 @@
 	// Fetch on mount and poll every 10 seconds
 	$effect(() => {
 		fetchStatus();
+		loadLibraryISOs();
 		const interval = setInterval(fetchStatus, 10000);
 		return () => clearInterval(interval);
 	});
@@ -124,6 +158,39 @@
 						Mount
 					{/if}
 				</Button>
+			</div>
+
+			<!-- Mount from library -->
+			<div class="mt-3 border-t border-light-200 pt-3">
+				<div class="mb-1.5 text-xs text-muted">or mount from library</div>
+				{#if libraryISOs.length > 0}
+					<div class="flex gap-2">
+						<select
+							bind:value={selectedISO}
+							disabled={loading}
+							class="flex-1 rounded border border-light-200 bg-white px-2 py-1 text-xs text-dark focus:border-primary-400 focus:outline-none disabled:opacity-50"
+						>
+							{#each libraryISOs as iso}
+								<option value={iso.filename}>{iso.filename}</option>
+							{/each}
+						</select>
+						<Button
+							onclick={handleMountLibrary}
+							disabled={!selectedISO || loading}
+							size="tiny"
+							variant="filled"
+							color="primary"
+						>
+							{#if libraryLoading}
+								<LoadingSpinner size="tiny" />
+							{:else}
+								Mount
+							{/if}
+						</Button>
+					</div>
+				{:else}
+					<p class="text-xs text-muted">No ISOs uploaded. <a href="/isos" class="text-primary hover:text-primary-600 transition-colors">Upload one</a></p>
+				{/if}
 			</div>
 		{:else}
 			<Button

@@ -33,6 +33,13 @@ type Settings struct {
 	MetricsEnabled     bool     `yaml:"metrics_enabled"`       // default false
 	BMCCredsTTLMinutes int      `yaml:"bmc_creds_ttl_minutes"` // default 120
 	AuditRetentionDays int      `yaml:"audit_retention_days"`  // default 90
+
+	// ISO library settings
+	ISODir          string `yaml:"iso_dir"`            // default "data/isos/"
+	ISOMaxSizeGB    int    `yaml:"iso_max_size_gb"`    // default 10
+	ISOServeAddress string `yaml:"iso_serve_address"`  // IP reachable from BMC network
+	NFSEnabled      *bool  `yaml:"nfs_enabled"`        // default false
+	NFSPort         int    `yaml:"nfs_port"`           // default 2049
 }
 
 // OIDCConfig holds optional OIDC authentication settings.
@@ -267,6 +274,22 @@ type VirtualMediaStatus struct {
 // VirtualMediaMountRequest is the request body for mounting virtual media.
 type VirtualMediaMountRequest struct {
 	ImageURL string `json:"image_url"`
+}
+
+// ISOFile represents an ISO image stored in the local library.
+type ISOFile struct {
+	ID         int64      `json:"id"`
+	Filename   string     `json:"filename"`
+	SizeBytes  int64      `json:"size_bytes"`
+	SHA256     string     `json:"sha256,omitempty"`
+	UploadedBy string     `json:"uploaded_by,omitempty"`
+	UploadedAt time.Time  `json:"uploaded_at"`
+	LastUsed   *time.Time `json:"last_used,omitempty"`
+}
+
+// MountLocalISORequest is the request body for mounting a local ISO from the library.
+type MountLocalISORequest struct {
+	Filename string `json:"filename"`
 }
 
 // --- Swagger request/response types for API documentation ---

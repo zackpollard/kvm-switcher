@@ -4,17 +4,19 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zackpollard/kvm-switcher/internal/api"
 	_ "github.com/zackpollard/kvm-switcher/internal/auth"   // Register authenticators
 	_ "github.com/zackpollard/kvm-switcher/internal/boards" // Register board handlers
 	"github.com/zackpollard/kvm-switcher/internal/config"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/zackpollard/kvm-switcher/internal/iso"
 	"github.com/zackpollard/kvm-switcher/internal/middleware"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
@@ -65,7 +67,27 @@ func main() {
 		log.Println("Audit logging enabled")
 	}
 
-	srv := api.NewServerWithStore(cfg, sessionStore, auditLogger)
+	// Ensure ISO directory exists
+	if err := os.MkdirAll(cfg.Settings.ISODir, 0755); err != nil {
+		log.Fatalf("Failed to create ISO directory %s: %v", cfg.Settings.ISODir, err)
+	}
+	log.Printf("ISO library directory: %s", cfg.Settings.ISODir)
+
+	// Auto-detect ISO serve address from ListenAddress if not explicitly set
+	if cfg.Settings.ISOServeAddress == "" {
+		host, _, err := net.SplitHostPort(cfg.Settings.ListenAddress)
+		if err == nil && host != "" && host != "0.0.0.0" && host != "::" {
+			cfg.Settings.ISOServeAddress = host
+		}
+		// If still empty, log a warning
+		if cfg.Settings.ISOServeAddress == "" {
+			log.Println("WARNING: iso_serve_address not configured and could not auto-detect. Local ISO mount will require explicit configuration.")
+		} else {
+			log.Printf("ISO serve address auto-detected: %s", cfg.Settings.ISOServeAddress)
+		}
+	}
+
+	srv := api.NewServerWithStore(cfg, sessionStore, auditLogger, db)
 
 	// Set up OIDC provider if enabled
 	var oidcProvider *kvmoidc.Provider
@@ -150,6 +172,13 @@ func main() {
 		mux.HandleFunc("/api/stream/h264", srv.HandleNanoKVMWebSocket)
 		mux.HandleFunc("GET /ws/kvm/{id}", srv.HandleKVMWebSocket)
 		mux.Handle("/__bmc/", bmcRateLimited(http.HandlerFunc(srv.HandleBMCProxy)))
+
+		// ISO library management routes
+		mux.HandleFunc("GET /api/isos", srv.ListISOs)
+		mux.Handle("POST /api/isos", rateLimited(http.HandlerFunc(srv.UploadISO)))
+		mux.Handle("DELETE /api/isos/{name}", rateLimited(http.HandlerFunc(srv.DeleteISO)))
+		mux.HandleFunc("GET /api/isos/{name}/download", srv.DownloadISO)
+		mux.Handle("POST /api/sessions/{id}/virtual-media/mount-local", rateLimited(http.HandlerFunc(srv.MountLocalISO)))
 	}
 
 	if oidcProvider != nil {
@@ -162,6 +191,26 @@ func main() {
 		mux.Handle("/__bmc/", protected)
 	} else {
 		registerAPIRoutes(mux)
+	}
+
+	// ISO file server — OUTSIDE OIDC middleware (BMCs need unauthenticated access)
+	bmcIPs := make([]string, 0, len(cfg.Servers))
+	for _, s := range cfg.Servers {
+		bmcIPs = append(bmcIPs, s.BMCIP)
+	}
+	isoFileServer := iso.NewFileServer(cfg.Settings.ISODir, db, bmcIPs)
+	mux.Handle("/iso/", isoFileServer)
+
+	// Start NFS server if enabled
+	var nfsServer *iso.NFSServer
+	if cfg.Settings.NFSEnabled != nil && *cfg.Settings.NFSEnabled {
+		var nfsErr error
+		nfsServer, nfsErr = iso.StartNFSServer(cfg.Settings.ISODir, cfg.Settings.NFSPort)
+		if nfsErr != nil {
+			log.Printf("WARNING: Failed to start NFS server: %v", nfsErr)
+		} else {
+			log.Printf("NFS server started on port %d", cfg.Settings.NFSPort)
+		}
 	}
 
 	// Serve frontend static files
@@ -221,6 +270,13 @@ func main() {
 			srv.StopIKVMBridge(session.ID)
 			session.Status = models.SessionDisconnected
 			srv.Sessions.Set(session)
+		}
+	}
+
+	// Stop NFS server if running
+	if nfsServer != nil {
+		if err := nfsServer.Shutdown(); err != nil {
+			log.Printf("NFS server shutdown error: %v", err)
 		}
 	}
 

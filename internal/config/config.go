@@ -131,6 +131,18 @@ func setDefaults(cfg *models.AppConfig) {
 		cfg.Settings.AuditRetentionDays = 90
 	}
 
+	// ISO library defaults
+	if cfg.Settings.ISODir == "" {
+		cfg.Settings.ISODir = "data/isos/"
+	}
+	if cfg.Settings.ISOMaxSizeGB <= 0 {
+		cfg.Settings.ISOMaxSizeGB = 10
+	}
+	// NFSEnabled nil = false (no default override needed)
+	if cfg.Settings.NFSPort <= 0 {
+		cfg.Settings.NFSPort = 2049
+	}
+
 	for i := range cfg.Servers {
 		if cfg.Servers[i].BMCPort <= 0 {
 			switch cfg.Servers[i].BoardType {
@@ -179,6 +191,28 @@ func applyEnvOverrides(cfg *models.AppConfig) {
 	if v := os.Getenv("KVM_AUDIT_RETENTION_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Settings.AuditRetentionDays = n
+		}
+	}
+
+	// ISO library env overrides
+	if v := os.Getenv("KVM_ISO_DIR"); v != "" {
+		cfg.Settings.ISODir = v
+	}
+	if v := os.Getenv("KVM_ISO_MAX_SIZE_GB"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Settings.ISOMaxSizeGB = n
+		}
+	}
+	if v := os.Getenv("KVM_ISO_SERVE_ADDRESS"); v != "" {
+		cfg.Settings.ISOServeAddress = v
+	}
+	if v := os.Getenv("KVM_NFS_ENABLED"); v != "" {
+		b := v == "true" || v == "1"
+		cfg.Settings.NFSEnabled = &b
+	}
+	if v := os.Getenv("KVM_NFS_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Settings.NFSPort = n
 		}
 	}
 }

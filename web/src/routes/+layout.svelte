@@ -47,6 +47,7 @@
 				</a>
 
 				<div class="flex items-center gap-3">
+					<a href="/isos" class="text-sm text-muted hover:text-dark transition-colors">ISO Library</a>
 					<a href="/audit" class="text-sm text-muted hover:text-dark transition-colors">Audit Log</a>
 					<ThemeSwitcher size="small" />
 

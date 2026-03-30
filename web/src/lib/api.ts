@@ -240,6 +240,81 @@ export async function ejectVirtualMedia(sessionId: string): Promise<void> {
 	}
 }
 
+export interface ISOFile {
+	id: number;
+	filename: string;
+	size_bytes: number;
+	sha256?: string;
+	uploaded_by?: string;
+	uploaded_at: string;
+	last_used?: string;
+}
+
+export interface ISOListResponse {
+	isos: ISOFile[];
+	total_size_bytes: number;
+	max_size_bytes: number;
+}
+
+export async function fetchISOs(): Promise<ISOListResponse> {
+	const res = await fetch(`${API_BASE}/isos`);
+	if (!res.ok) throw new Error('Failed to fetch ISOs');
+	return res.json();
+}
+
+export function uploadISO(file: File, onProgress?: (pct: number) => void): Promise<ISOFile> {
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('POST', `${API_BASE}/isos`);
+
+		if (onProgress) {
+			xhr.upload.onprogress = (e) => {
+				if (e.lengthComputable) {
+					onProgress(Math.round((e.loaded / e.total) * 100));
+				}
+			};
+		}
+
+		xhr.onload = () => {
+			if (xhr.status >= 200 && xhr.status < 300) {
+				resolve(JSON.parse(xhr.responseText));
+			} else {
+				try {
+					const data = JSON.parse(xhr.responseText);
+					reject(new Error(data.error || `Upload failed: ${xhr.statusText}`));
+				} catch {
+					reject(new Error(`Upload failed: ${xhr.statusText}`));
+				}
+			}
+		};
+		xhr.onerror = () => reject(new Error('Upload failed: network error'));
+
+		const formData = new FormData();
+		formData.append('file', file);
+		xhr.send(formData);
+	});
+}
+
+export async function deleteISO(name: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/isos/${encodeURIComponent(name)}`, { method: 'DELETE' });
+	if (!res.ok) {
+		const data = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(data.error || 'Delete failed');
+	}
+}
+
+export async function mountLocalISO(sessionId: string, filename: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/virtual-media/mount-local`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ filename })
+	});
+	if (!res.ok) {
+		const data = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(data.error || 'Mount failed');
+	}
+}
+
 export interface AuthStatus {
 	authenticated: boolean;
 	oidc_enabled?: boolean;
