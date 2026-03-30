@@ -3,10 +3,15 @@
 ## Features
 
 ### Virtual Media
-- [x] ISO mounting for iDRAC8/iDRAC9 via Redfish virtual media API
-- [ ] Virtual media for MegaRAC (web API — needs live BMC research)
+- [x] ISO mounting for iDRAC9 via Redfish virtual media API (Basic Auth)
+- [x] MegaRAC virtual media via NFS/CIFS shares (web API)
 - [x] Frontend UI for mounting ISOs via URL
-- [ ] Upload-based mounting (serve ISOs from the Go server)
+- [x] ISO Library — upload, download from URL, manage ISOs on server
+- [x] HTTP file server for iDRAC to fetch ISOs from the KVM Switcher
+- [x] NFS server (go-nfs) for MegaRAC to mount ISOs from the KVM Switcher
+- [x] "Mount from Library" in virtual media panel with auto-URL generation
+- [x] Download progress with rate and ETA
+- [ ] iDRAC8 virtual media (Redfish InsertMedia returns 500 on firmware 2.x — needs proprietary API)
 
 ### Serial over LAN (SOL)
 - [ ] Text-based console access alongside KVM
@@ -53,7 +58,7 @@
 - [x] Auth flow integration tests (OIDC -> session -> RBAC with 5 sub-tests)
 
 ### API Documentation
-- [x] OpenAPI/Swagger spec for all REST endpoints (api/openapi.yaml, 22 paths, 24 schemas)
+- [x] OpenAPI/Swagger spec from code annotations (swaggo, CI validation)
 - [x] WebSocket protocol documentation (docs/websocket-protocol.md)
 - [x] Document the service worker routing rules (docs/service-worker.md)
 
@@ -78,3 +83,8 @@
 - [x] Multi-arch Docker image (ARM + amd64 via publish.yml with native runners)
 - [x] Clean up legacy JViewer Docker build targets from Makefile
 - [x] Document production deployment (docs/deployment.md: config, Docker, nginx, OIDC, security)
+
+### UI
+- [x] @immich/ui component library with light/dark theme
+- [x] Custom ServerCard component for dashboard
+- [x] Proper dark mode color resolution (@source directive)
