@@ -476,7 +476,7 @@
 							<td class="whitespace-nowrap px-4 py-3">
 								<div class="flex items-center gap-2">
 									<a
-										href="/api/isos/{encodeURIComponent(iso.filename)}/download"
+										href="/api/iso-file/{encodeURIComponent(iso.filename)}"
 										class="text-xs text-primary hover:text-primary-600 transition-colors"
 										download
 									>

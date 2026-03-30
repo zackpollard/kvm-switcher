@@ -315,7 +315,7 @@ export interface ISODownloadStatus {
 }
 
 export async function downloadISOFromURL(url: string, filename?: string): Promise<ISODownloadStatus> {
-	const res = await fetch(`${API_BASE}/isos/download`, {
+	const res = await fetch(`${API_BASE}/iso-downloads`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ url, filename: filename || undefined }),
@@ -328,7 +328,7 @@ export async function downloadISOFromURL(url: string, filename?: string): Promis
 }
 
 export async function fetchISODownloads(): Promise<ISODownloadStatus[]> {
-	const res = await fetch(`${API_BASE}/isos/downloads`);
+	const res = await fetch(`${API_BASE}/iso-downloads`);
 	if (!res.ok) throw new Error('Failed to fetch downloads');
 	return res.json();
 }
