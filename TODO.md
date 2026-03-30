@@ -20,9 +20,10 @@
 - [ ] SOL via IPMI for MegaRAC/iDRAC, SSH for NanoKVM
 
 ### Multi-User KVM
-- [ ] Show who else is connected to a KVM session
-- [ ] Session takeover/sharing controls
-- [ ] Concurrent viewer support (read-only observers)
+- [x] Show who else is connected (viewer presence with avatars in toolbar)
+- [x] Input control transfer (request/release with auto-transfer on disconnect)
+- [x] Concurrent viewer support (per-client frame subscribers, viewOnly mode)
+- [ ] Multi-viewer for VNC/WSS modes (fan-out refactor — deferred)
 
 ## Reliability / UX
 
