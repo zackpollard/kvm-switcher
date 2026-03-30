@@ -182,6 +182,8 @@ func main() {
 		mux.HandleFunc("GET /api/iso-downloads", srv.ListISODownloads)
 		mux.HandleFunc("GET /api/iso-downloads/{id}", srv.GetISODownload)
 		mux.Handle("POST /api/sessions/{id}/virtual-media/mount-local", rateLimited(http.HandlerFunc(srv.MountLocalISO)))
+		mux.Handle("POST /api/sessions/{id}/viewers/request-control", rateLimited(http.HandlerFunc(srv.RequestViewerControl)))
+		mux.Handle("POST /api/sessions/{id}/viewers/release-control", rateLimited(http.HandlerFunc(srv.ReleaseViewerControl)))
 	}
 
 	if oidcProvider != nil {

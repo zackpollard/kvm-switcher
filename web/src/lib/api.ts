@@ -7,6 +7,14 @@ export interface ServerInfo {
 	active_session_id?: string;
 }
 
+export interface Viewer {
+	id: string;
+	display_name: string;
+	ip: string;
+	has_control: boolean;
+	connected_at: string;
+}
+
 export interface KVMSession {
 	id: string;
 	server_name: string;
@@ -20,6 +28,8 @@ export interface KVMSession {
 	last_activity: string;
 	error?: string;
 	idle_timeout_remaining_seconds?: number;
+	viewers?: Viewer[];
+	viewer_count?: number;
 }
 
 const API_BASE = '/api';
@@ -343,6 +353,16 @@ export async function mountLocalISO(sessionId: string, filename: string): Promis
 		const data = await res.json().catch(() => ({ error: res.statusText }));
 		throw new Error(data.error || 'Mount failed');
 	}
+}
+
+export async function requestViewerControl(sessionId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/request-control`, { method: 'POST' });
+	if (!res.ok) throw new Error('Failed to request control');
+}
+
+export async function releaseViewerControl(sessionId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/release-control`, { method: 'POST' });
+	if (!res.ok) throw new Error('Failed to release control');
 }
 
 export interface AuthStatus {

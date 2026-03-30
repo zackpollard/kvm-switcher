@@ -32,6 +32,10 @@ type Bridge struct {
 	fbDirty    bool
 	frameReady chan struct{} // signals from video frame callback
 
+	// Per-client frame notification subscribers
+	frameSubs   map[chan struct{}]struct{}
+	frameSubsMu sync.Mutex
+
 	// Keyboard state -- USB HID uses cumulative modifier tracking
 	kbdModifiers byte
 
@@ -236,15 +240,49 @@ func (b *Bridge) Stop() {
 	b.log.Printf("iKVM bridge: background session stopped")
 }
 
+// SubscribeFrames creates and registers a per-client notification channel.
+// The returned channel receives a signal (non-blocking) whenever a new video
+// frame is decoded. Callers must call UnsubscribeFrames when done.
+func (b *Bridge) SubscribeFrames() chan struct{} {
+	ch := make(chan struct{}, 1)
+	b.frameSubsMu.Lock()
+	if b.frameSubs == nil {
+		b.frameSubs = make(map[chan struct{}]struct{})
+	}
+	b.frameSubs[ch] = struct{}{}
+	b.frameSubsMu.Unlock()
+	return ch
+}
+
+// UnsubscribeFrames removes and closes a per-client notification channel.
+func (b *Bridge) UnsubscribeFrames(ch chan struct{}) {
+	b.frameSubsMu.Lock()
+	delete(b.frameSubs, ch)
+	b.frameSubsMu.Unlock()
+	close(ch)
+}
+
 // ServeWebSocket handles a noVNC WebSocket client. It performs the VNC
 // handshake, then loops sending framebuffer updates and reading input.
 // Blocks until the WebSocket closes or the bridge context is cancelled.
 // Multiple clients can be served over the bridge's lifetime (sequentially
-// or concurrently).
+// or concurrently). All input is allowed.
 func (b *Bridge) ServeWebSocket(ws WebSocketConn) error {
+	return b.ServeWebSocketWithControl(ws, nil)
+}
+
+// ServeWebSocketWithControl handles a noVNC WebSocket client with an optional
+// input gating function. If inputAllowed is non-nil, keyboard and mouse events
+// are only forwarded to the BMC when inputAllowed() returns true. If nil, all
+// input is forwarded (backward compatible behavior).
+func (b *Bridge) ServeWebSocketWithControl(ws WebSocketConn, inputAllowed func() bool) error {
 	if !b.Running() {
 		return fmt.Errorf("bridge not running")
 	}
+
+	// Subscribe to per-client frame notifications
+	frameCh := b.SubscribeFrames()
+	defer b.UnsubscribeFrames(frameCh)
 
 	// Wait for the bridge to be ready (first frame decoded) so we can
 	// send the correct resolution in ServerInit. Time out after 30s.
@@ -287,14 +325,14 @@ func (b *Bridge) ServeWebSocket(ws WebSocketConn) error {
 	// Run input reader and frame sender in parallel, scoped to this WS client.
 	errCh := make(chan error, 2)
 
-	// VNC client -> BMC (keyboard/mouse input reader)
+	// VNC client -> BMC (keyboard/mouse input reader with optional gating)
 	go func() {
-		errCh <- b.readVNCInput(b.ctx, ws)
+		errCh <- b.readVNCInput(b.ctx, ws, inputAllowed)
 	}()
 
-	// BMC -> VNC client (video frame sender)
+	// BMC -> VNC client (video frame sender using per-client channel)
 	go func() {
-		errCh <- b.sendVNCFrames(b.ctx, ws)
+		errCh <- b.sendVNCFrames(b.ctx, ws, frameCh)
 	}()
 
 	// Wait for first error (WS close or bridge shutdown)
@@ -353,10 +391,20 @@ func (b *Bridge) onVideoFrame(header *ASPEEDVideoHeader, data []byte) {
 	}
 
 	b.fbDirty = true
+	// Notify legacy channel (backward compat / internal use)
 	select {
 	case b.frameReady <- struct{}{}:
 	default:
 	}
+	// Notify all per-client subscribers
+	b.frameSubsMu.Lock()
+	for ch := range b.frameSubs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	b.frameSubsMu.Unlock()
 
 	// Signal readiness on the first successfully decoded frame.
 	b.runMu.Lock()

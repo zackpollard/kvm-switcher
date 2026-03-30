@@ -77,7 +77,9 @@ func (b *Bridge) buildServerInit() []byte {
 }
 
 // readVNCInput reads VNC client messages (keyboard/mouse) and forwards to BMC.
-func (b *Bridge) readVNCInput(ctx context.Context, ws WebSocketConn) error {
+// If inputAllowed is non-nil, keyboard and mouse events are only forwarded
+// when inputAllowed() returns true. If nil, all input is forwarded.
+func (b *Bridge) readVNCInput(ctx context.Context, ws WebSocketConn, inputAllowed func() bool) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -100,11 +102,11 @@ func (b *Bridge) readVNCInput(ctx context.Context, ws WebSocketConn) error {
 		case 2: // SetEncodings -- accept but ignore, we always use Raw
 		case 3: // FramebufferUpdateRequest -- acknowledged, frames sent on arrival
 		case 4: // KeyEvent
-			if len(data) >= 8 {
+			if len(data) >= 8 && (inputAllowed == nil || inputAllowed()) {
 				b.handleKeyEvent(data)
 			}
 		case 5: // PointerEvent
-			if len(data) >= 6 {
+			if len(data) >= 6 && (inputAllowed == nil || inputAllowed()) {
 				b.handlePointerEvent(data)
 			}
 		}
@@ -180,7 +182,8 @@ func (b *Bridge) handlePointerEvent(data []byte) {
 }
 
 // sendVNCFrames sends VNC FramebufferUpdate messages when new frames arrive.
-func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn) error {
+// frameCh is a per-client notification channel from SubscribeFrames().
+func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn, frameCh <-chan struct{}) error {
 	lastW := b.width
 	lastH := b.height
 
@@ -195,13 +198,13 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-b.frameReady:
+		case <-frameCh:
 		}
 		// Brief wait to coalesce rapid frames (5ms max additional latency)
 		coalesce := time.NewTimer(5 * time.Millisecond)
 		for coalescing := true; coalescing; {
 			select {
-			case <-b.frameReady:
+			case <-frameCh:
 				// More frames arriving — reset the timer
 				coalesce.Reset(5 * time.Millisecond)
 			case <-coalesce.C:

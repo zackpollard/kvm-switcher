@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/zackpollard/kvm-switcher/internal/ikvm"
 	"github.com/zackpollard/kvm-switcher/internal/models"
@@ -95,6 +96,16 @@ func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
 	log.Printf("Session %s: proxying WebSocket to WSS %s", session.ID, session.KVMTarget)
 
+	// Register viewer for tracking
+	viewerID := uuid.New().String()
+	displayName, _, viewerIP := s.resolveViewerIdentity(r)
+	registry := s.ensureViewerRegistry(session.ID)
+	registry.Add(viewerID, displayName, viewerIP)
+	defer registry.Remove(viewerID)
+	if registry.Count() > 1 {
+		log.Printf("Session %s: WARNING: multiple viewers on WSS session; input sharing not fully supported for this mode", session.ID)
+	}
+
 	// The iDRAC9 WSS endpoint needs the session cookie + XSRF token for auth.
 	s.bmcCredsMu.Lock()
 	credEntry := s.BMCCreds[session.ID]
@@ -150,6 +161,16 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 // with SetEncodings filtering for iDRAC8 compatibility.
 func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
 	log.Printf("Session %s: VNC connect (bridge running=%v)", session.ID, s.vncBridgeRunning(session.ID))
+
+	// Register viewer for tracking
+	viewerID := uuid.New().String()
+	displayName, _, viewerIP := s.resolveViewerIdentity(r)
+	registry := s.ensureViewerRegistry(session.ID)
+	registry.Add(viewerID, displayName, viewerIP)
+	defer registry.Remove(viewerID)
+	if registry.Count() > 1 {
+		log.Printf("Session %s: WARNING: multiple viewers on VNC session; input sharing not fully supported for this mode", session.ID)
+	}
 
 	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
@@ -429,6 +450,14 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 	}
 	defer clientConn.Close()
 
+	// Register this viewer
+	viewerID := uuid.New().String()
+	displayName, _, viewerIP := s.resolveViewerIdentity(r)
+	registry := s.ensureViewerRegistry(session.ID)
+	registry.Add(viewerID, displayName, viewerIP)
+	defer registry.Remove(viewerID)
+	log.Printf("Session %s: viewer %s (%s) connected [%d total]", session.ID, viewerID, displayName, registry.Count())
+
 	// Ensure the background bridge is running (creates + starts it on first call).
 	bridge, err := s.ensureIKVMBridge(session)
 	if err != nil {
@@ -436,12 +465,14 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 		return
 	}
 
-	// Serve this WebSocket client. Blocks until the client disconnects or the
-	// bridge shuts down. The bridge itself keeps running after this returns.
-	if err := bridge.ServeWebSocket(clientConn); err != nil {
+	// Serve this WebSocket client with input gating based on viewer control.
+	// Blocks until the client disconnects or the bridge shuts down.
+	if err := bridge.ServeWebSocketWithControl(clientConn, func() bool {
+		return registry.HasControl(viewerID)
+	}); err != nil {
 		log.Printf("Session %s: iKVM WebSocket error: %v", session.ID, err)
 	}
-	log.Printf("Session %s: iKVM WebSocket disconnected", session.ID)
+	log.Printf("Session %s: viewer %s (%s) disconnected [%d remaining]", session.ID, viewerID, displayName, registry.Count())
 }
 
 // ensureIKVMBridge returns the running bridge for the session, creating and

@@ -44,6 +44,9 @@ type Server struct {
 
 	Downloads    map[string]*ISODownload        // active ISO downloads by download ID
 	downloadsMu  sync.Mutex
+
+	ViewerRegistries map[string]*ViewerRegistry // viewer tracking per session ID
+	viewerRegMu      sync.Mutex
 }
 
 // NewServer creates a new API server with an in-memory session store and starts background pollers.
@@ -58,15 +61,16 @@ func NewServer(cfg *models.AppConfig) *Server {
 func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInterface, auditDB models.AuditLogger, db *store.DB) *Server {
 	sc := NewStatusCache()
 	srv := &Server{
-		Config:      cfg,
-		Sessions:    sessions,
-		BMCCreds:    make(map[string]*models.BMCCredEntry),
-		Bridges:  make(map[string]*ikvm.Bridge),
-		VNCBridges: make(map[string]*vnc.Bridge),
-		Downloads:  make(map[string]*ISODownload),
-		StatusCache: sc,
-		AuditDB:     auditDB,
-		DB:          db,
+		Config:           cfg,
+		Sessions:         sessions,
+		BMCCreds:         make(map[string]*models.BMCCredEntry),
+		Bridges:          make(map[string]*ikvm.Bridge),
+		VNCBridges:       make(map[string]*vnc.Bridge),
+		Downloads:        make(map[string]*ISODownload),
+		ViewerRegistries: make(map[string]*ViewerRegistry),
+		StatusCache:      sc,
+		AuditDB:          auditDB,
+		DB:               db,
 	}
 	StartSessionManager(cfg.Servers, srv.StatusCache)
 	StartStatusPoller(cfg.Servers, srv.StatusCache)
@@ -78,13 +82,14 @@ func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInter
 func newServerCore(cfg *models.AppConfig) *Server {
 	sc := NewStatusCache()
 	return &Server{
-		Config:      cfg,
-		Sessions:    models.NewSessionStore(),
-		BMCCreds:    make(map[string]*models.BMCCredEntry),
-		Bridges:  make(map[string]*ikvm.Bridge),
-		VNCBridges: make(map[string]*vnc.Bridge),
-		Downloads:  make(map[string]*ISODownload),
-		StatusCache: sc,
+		Config:           cfg,
+		Sessions:         models.NewSessionStore(),
+		BMCCreds:         make(map[string]*models.BMCCredEntry),
+		Bridges:          make(map[string]*ikvm.Bridge),
+		VNCBridges:       make(map[string]*vnc.Bridge),
+		Downloads:        make(map[string]*ISODownload),
+		ViewerRegistries: make(map[string]*ViewerRegistry),
+		StatusCache:      sc,
 	}
 }
 
@@ -394,7 +399,9 @@ func (s *Server) startDirectSession(ctx context.Context, session *models.KVMSess
 // sessionResponse wraps a KVMSession with additional computed fields.
 type sessionResponse struct {
 	*models.KVMSession
-	IdleTimeoutRemaining *float64 `json:"idle_timeout_remaining_seconds,omitempty"`
+	IdleTimeoutRemaining *float64         `json:"idle_timeout_remaining_seconds,omitempty"`
+	Viewers              []*models.Viewer `json:"viewers,omitempty"`
+	ViewerCount          int              `json:"viewer_count"`
 }
 
 // GetSession godoc
@@ -423,6 +430,15 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 		}
 		secs := remaining.Seconds()
 		resp.IdleTimeoutRemaining = &secs
+	}
+
+	// Populate viewer info from the registry
+	s.viewerRegMu.Lock()
+	reg := s.ViewerRegistries[id]
+	s.viewerRegMu.Unlock()
+	if reg != nil {
+		resp.Viewers = reg.List()
+		resp.ViewerCount = reg.Count()
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -1260,6 +1276,118 @@ func (s *Server) logAudit(eventType, userEmail, serverName, sessionID, remoteAdd
 	}); err != nil {
 		log.Printf("audit: failed to log %s: %v", eventType, err)
 	}
+}
+
+// ensureViewerRegistry returns the ViewerRegistry for a session, creating one if needed.
+func (s *Server) ensureViewerRegistry(sessionID string) *ViewerRegistry {
+	s.viewerRegMu.Lock()
+	defer s.viewerRegMu.Unlock()
+
+	reg, ok := s.ViewerRegistries[sessionID]
+	if !ok {
+		reg = NewViewerRegistry()
+		s.ViewerRegistries[sessionID] = reg
+	}
+	return reg
+}
+
+// RequestViewerControl handles POST /api/sessions/{id}/viewers/request-control.
+// The caller is identified by OIDC email or remote IP and granted input control.
+func (s *Server) RequestViewerControl(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	session, ok := s.Sessions.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	// Identify the caller
+	displayName, userEmail, ip := s.resolveViewerIdentity(r)
+
+	s.viewerRegMu.Lock()
+	reg, ok := s.ViewerRegistries[id]
+	s.viewerRegMu.Unlock()
+	if !ok || reg.Count() == 0 {
+		writeError(w, http.StatusNotFound, "no viewers connected")
+		return
+	}
+
+	// Find the caller's viewer ID by matching display name
+	var viewerID string
+	for _, v := range reg.List() {
+		if v.DisplayName == displayName {
+			viewerID = v.ID
+			break
+		}
+	}
+	if viewerID == "" {
+		writeError(w, http.StatusNotFound, "viewer not found for this identity")
+		return
+	}
+
+	if !reg.RequestControl(viewerID) {
+		writeError(w, http.StatusConflict, "failed to grant control")
+		return
+	}
+
+	s.logAudit("kvm_control_transfer", userEmail, session.ServerName, id, ip, map[string]string{
+		"viewer_id": viewerID,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "controller": viewerID})
+}
+
+// ReleaseViewerControl handles POST /api/sessions/{id}/viewers/release-control.
+// The caller releases input control, which is passed to the next viewer.
+func (s *Server) ReleaseViewerControl(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	session, ok := s.Sessions.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	displayName, userEmail, ip := s.resolveViewerIdentity(r)
+
+	s.viewerRegMu.Lock()
+	reg, ok := s.ViewerRegistries[id]
+	s.viewerRegMu.Unlock()
+	if !ok || reg.Count() == 0 {
+		writeError(w, http.StatusNotFound, "no viewers connected")
+		return
+	}
+
+	var viewerID string
+	for _, v := range reg.List() {
+		if v.DisplayName == displayName {
+			viewerID = v.ID
+			break
+		}
+	}
+	if viewerID == "" {
+		writeError(w, http.StatusNotFound, "viewer not found for this identity")
+		return
+	}
+
+	reg.ReleaseControl(viewerID)
+
+	s.logAudit("kvm_control_release", userEmail, session.ServerName, id, ip, map[string]string{
+		"viewer_id": viewerID,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// resolveViewerIdentity determines the display name, email, and IP for a request.
+func (s *Server) resolveViewerIdentity(r *http.Request) (displayName, userEmail, ip string) {
+	ip, _, _ = net.SplitHostPort(r.RemoteAddr)
+	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
+		userEmail = user.Email
+		displayName = user.Email
+	} else {
+		displayName = ip
+	}
+	return
 }
 
 // CleanupStaleBMCCreds removes BMC credentials older than the configured TTL

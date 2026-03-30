@@ -1,13 +1,19 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 
-	let { wsUrl, container, ondisconnect, password }: { wsUrl: string; container: HTMLDivElement; ondisconnect?: () => void; password?: string } = $props();
+	let { wsUrl, container, ondisconnect, password, viewOnly = false }: { wsUrl: string; container: HTMLDivElement; ondisconnect?: () => void; password?: string; viewOnly?: boolean } = $props();
 
 	let canvasContainer: HTMLDivElement;
 	let rfb: any = null;
 	let status = $state('Connecting...');
 	let connected = $state(false);
 	let ctrlAltDelHandler: (() => void) | null = null;
+
+	$effect(() => {
+		if (rfb) {
+			rfb.viewOnly = viewOnly;
+		}
+	});
 
 	onMount(async () => {
 		const { default: RFB } = await import('@novnc/novnc');

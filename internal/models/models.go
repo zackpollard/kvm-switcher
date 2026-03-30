@@ -82,6 +82,15 @@ type UserSession struct {
 	ExpiresAt    time.Time
 }
 
+// Viewer represents a connected viewer of a KVM session.
+type Viewer struct {
+	ID          string    `json:"id"`
+	DisplayName string    `json:"display_name"`
+	IP          string    `json:"ip"`
+	HasControl  bool      `json:"has_control"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
 // SessionStatus represents the lifecycle state of a KVM session.
 type SessionStatus string
 

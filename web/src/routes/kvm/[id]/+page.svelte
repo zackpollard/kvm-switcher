@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, getVirtualMediaStatus, type KVMSession } from '$lib/api';
+	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, getVirtualMediaStatus, fetchAuthStatus, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 	import VirtualMediaPanel from '$lib/components/VirtualMediaPanel.svelte';
+	import ViewerPresence from '$lib/components/ViewerPresence.svelte';
 	import { Button, LoadingSpinner, Alert } from '@immich/ui';
 
 	let session: KVMSession | null = $state(null);
@@ -20,6 +21,12 @@
 	let showMediaPanel = $state(false);
 	let mediaSupported = $state(false);
 	let isIKVM = $derived(session?.conn_mode === 'ikvm');
+	let currentUser = $state('You');
+	let viewers = $derived(session?.viewers || []);
+	let viewerCount = $derived(session?.viewer_count || 0);
+	let hasControl = $derived(
+		viewerCount <= 1 || viewers.some((v) => v.has_control && v.display_name === currentUser)
+	);
 
 	async function loadSession() {
 		try {
@@ -174,6 +181,16 @@
 		document.addEventListener('keydown', handleKeydown);
 		return () => document.removeEventListener('keydown', handleKeydown);
 	});
+
+	$effect(() => {
+		fetchAuthStatus()
+			.then((auth) => {
+				currentUser = auth.name || auth.email || 'You';
+			})
+			.catch(() => {
+				currentUser = 'You';
+			});
+	});
 </script>
 
 <div class="flex h-[calc(100vh-3.5rem)] flex-col">
@@ -208,7 +225,15 @@
 			{/if}
 		</div>
 
-		<div class="flex items-center gap-1">
+		<div class="flex items-center gap-2">
+			{#if viewerCount > 1}
+				<ViewerPresence
+					{viewers}
+					currentUserName={currentUser}
+					sessionId={activeSessionId}
+				/>
+				<div class="mx-1 h-5 w-px bg-light-200" aria-hidden="true"></div>
+			{/if}
 			<Button style="border-radius: 0.75rem" onclick={sendCtrlAltDel} size="tiny" variant="ghost" color="secondary">
 				Ctrl+Alt+Del
 			</Button>
@@ -359,7 +384,7 @@
 				</div>
 			</div>
 		{:else if session?.status === 'connected'}
-			<KVMViewer wsUrl={getKVMWebSocketURL(activeSessionId)} container={viewerContainer} ondisconnect={handleViewerDisconnect} password={session?.kvm_password} />
+			<KVMViewer wsUrl={getKVMWebSocketURL(activeSessionId)} container={viewerContainer} ondisconnect={handleViewerDisconnect} password={session?.kvm_password} viewOnly={!hasControl} />
 		{:else if session?.status === 'disconnected'}
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
