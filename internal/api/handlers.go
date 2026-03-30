@@ -448,14 +448,6 @@ func (s *Server) KeepAliveSession(w http.ResponseWriter, r *http.Request) {
 	session.LastActivity = time.Now()
 	s.Sessions.Set(session)
 
-	// Audit log
-	userEmail := ""
-	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
-		userEmail = user.Email
-	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	s.logAudit("session_keepalive", userEmail, session.ServerName, id, ip, nil)
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -1554,7 +1546,6 @@ func (s *Server) VirtualMediaEject(w http.ResponseWriter, r *http.Request) {
 // @Failure 502 {object} models.ErrorResponse "BMC authentication failed"
 // @Router /api/sessions/{id}/virtual-media [get]
 func (s *Server) VirtualMediaStatus(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
 	serverCfg, creds, vmHandler := s.resolveVirtualMedia(w, r)
 	if vmHandler == nil {
 		return // error already written
@@ -1566,19 +1557,6 @@ func (s *Server) VirtualMediaStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("status query failed: %v", err))
 		return
 	}
-
-	// Audit log
-	session, _ := s.Sessions.Get(id)
-	serverName := ""
-	if session != nil {
-		serverName = session.ServerName
-	}
-	userEmail := ""
-	if user := kvmoidc.UserFromContext(r.Context()); user != nil {
-		userEmail = user.Email
-	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	s.logAudit("virtual_media_status", userEmail, serverName, id, ip, nil)
 
 	writeJSON(w, http.StatusOK, status)
 }
