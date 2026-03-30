@@ -75,9 +75,14 @@ export async function listSessions(): Promise<KVMSession[]> {
 	return res.json();
 }
 
-export function getKVMWebSocketURL(sessionId: string): string {
+export function getKVMWebSocketURL(sessionId: string, viewerId?: string): string {
 	const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-	return `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
+	const base = `${protocol}//${window.location.host}/ws/kvm/${sessionId}`;
+	return viewerId ? `${base}?viewer_id=${viewerId}` : base;
+}
+
+export function generateViewerId(): string {
+	return crypto.randomUUID();
 }
 
 // --- iKVM control commands ---

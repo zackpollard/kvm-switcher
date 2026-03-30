@@ -115,7 +115,10 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 	log.Printf("Session %s: proxying WebSocket to WSS %s", session.ID, session.KVMTarget)
 
 	// Register viewer for tracking
-	viewerID := uuid.New().String()
+	viewerID := r.URL.Query().Get("viewer_id")
+	if viewerID == "" {
+		viewerID = uuid.New().String()
+	}
 	displayName, _, viewerIP := s.resolveViewerIdentity(r)
 	registry := s.ensureViewerRegistry(session.ID)
 	registry.Add(viewerID, displayName, viewerIP)
@@ -331,7 +334,10 @@ func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *model
 	log.Printf("Session %s: VNC connect (bridge running=%v)", session.ID, s.vncBridgeRunning(session.ID))
 
 	// Register viewer for tracking
-	viewerID := uuid.New().String()
+	viewerID := r.URL.Query().Get("viewer_id")
+	if viewerID == "" {
+		viewerID = uuid.New().String()
+	}
 	displayName, _, viewerIP := s.resolveViewerIdentity(r)
 	registry := s.ensureViewerRegistry(session.ID)
 	registry.Add(viewerID, displayName, viewerIP)
@@ -620,7 +626,10 @@ func (s *Server) proxyIKVM(w http.ResponseWriter, r *http.Request, session *mode
 	defer clientConn.Close()
 
 	// Register this viewer
-	viewerID := uuid.New().String()
+	viewerID := r.URL.Query().Get("viewer_id")
+	if viewerID == "" {
+		viewerID = uuid.New().String()
+	}
 	displayName, _, viewerIP := s.resolveViewerIdentity(r)
 	registry := s.ensureViewerRegistry(session.ID)
 	registry.Add(viewerID, displayName, viewerIP)

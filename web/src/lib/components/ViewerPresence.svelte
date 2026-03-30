@@ -6,9 +6,10 @@
 		viewers: Viewer[];
 		currentUserName: string;
 		sessionId: string;
+		myViewerId: string;
 	}
 
-	let { viewers, currentUserName, sessionId }: Props = $props();
+	let { viewers, currentUserName, sessionId, myViewerId }: Props = $props();
 
 	let requesting = $state(false);
 	let error = $state('');

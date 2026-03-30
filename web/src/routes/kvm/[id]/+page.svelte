@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { getSession, deleteSession, createSession, getKVMWebSocketURL, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, getVirtualMediaStatus, fetchAuthStatus, type KVMSession } from '$lib/api';
+	import { getSession, deleteSession, createSession, getKVMWebSocketURL, generateViewerId, kvmPowerControl, kvmDisplayLock, kvmResetVideo, kvmMouseMode, kvmKeyboardLayout, getVirtualMediaStatus, fetchAuthStatus, type KVMSession } from '$lib/api';
 	import KVMViewer from '$lib/components/KVMViewer.svelte';
 	import SessionTimeoutWarning from '$lib/components/SessionTimeoutWarning.svelte';
 	import VirtualMediaPanel from '$lib/components/VirtualMediaPanel.svelte';
@@ -22,10 +22,11 @@
 	let mediaSupported = $state(false);
 	let isIKVM = $derived(session?.conn_mode === 'ikvm');
 	let currentUser = $state('You');
+	let myViewerId = $state(generateViewerId());
 	let viewers = $derived(session?.viewers || []);
 	let viewerCount = $derived(session?.viewer_count || 0);
 	let hasControl = $derived(
-		viewerCount <= 1 || viewers.some((v) => v.has_control && (v.display_name === currentUser || currentUser === 'You'))
+		viewerCount <= 1 || viewers.some((v) => v.has_control && v.id === myViewerId)
 	);
 
 	async function loadSession() {
@@ -231,6 +232,7 @@
 					{viewers}
 					currentUserName={currentUser}
 					sessionId={activeSessionId}
+					myViewerId={myViewerId}
 				/>
 				<div class="mx-1 h-5 w-px bg-light-200" aria-hidden="true"></div>
 			{/if}
@@ -384,7 +386,7 @@
 				</div>
 			</div>
 		{:else if session?.status === 'connected'}
-			<KVMViewer wsUrl={getKVMWebSocketURL(activeSessionId)} container={viewerContainer} ondisconnect={handleViewerDisconnect} password={session?.kvm_password} viewOnly={!hasControl} />
+			<KVMViewer wsUrl={getKVMWebSocketURL(activeSessionId, myViewerId)} container={viewerContainer} ondisconnect={handleViewerDisconnect} password={session?.kvm_password} viewOnly={!hasControl} />
 		{:else if session?.status === 'disconnected'}
 			<div class="flex h-full items-center justify-center">
 				<div class="text-center">
