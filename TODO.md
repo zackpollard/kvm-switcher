@@ -23,7 +23,8 @@
 - [x] Show who else is connected (viewer presence with avatars in toolbar)
 - [x] Input control transfer (request/release with auto-transfer on disconnect)
 - [x] Concurrent viewer support (per-client frame subscribers, viewOnly mode)
-- [ ] Multi-viewer for VNC/WSS modes (fan-out refactor — deferred)
+- [x] Multi-viewer for VNC/WSS modes (hybrid direct-pipe/broadcast, concurrent writes)
+- [x] VNC performance: native pixel format for iDRAC9, compressed encodings pass-through
 
 ## Reliability / UX
 
