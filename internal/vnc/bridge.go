@@ -107,7 +107,7 @@ func (b *Bridge) broadcastLoop() {
 		b.mu.Unlock()
 	}()
 
-	buf := make([]byte, 65536)
+	buf := make([]byte, 262144) // 256KB — reduces read syscalls for large VNC frames
 	for {
 		if !b.Running() {
 			return
@@ -125,29 +125,45 @@ func (b *Bridge) broadcastLoop() {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		// Write to all clients concurrently so one slow client
-		// doesn't block frame delivery to others.
+		// Fan out to all connected clients. For a single client,
+		// write directly to avoid goroutine overhead.
 		b.clientsMu.Lock()
-		var wg sync.WaitGroup
-		for ws, client := range b.clients {
-			wg.Add(1)
-			go func(ws *websocket.Conn, client *wsClient) {
-				defer wg.Done()
+		clientCount := len(b.clients)
+		if clientCount == 1 {
+			for ws, client := range b.clients {
 				client.writeMu.Lock()
-				ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
-					log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
+					log.Printf("VNC bridge: write failed, removing client: %v", err)
 					ws.Close()
-					b.clientsMu.Lock()
 					delete(b.clients, ws)
-					b.clientsMu.Unlock()
 				}
-				ws.SetWriteDeadline(time.Time{})
 				client.writeMu.Unlock()
-			}(ws, client)
+			}
+			b.clientsMu.Unlock()
+		} else if clientCount > 1 {
+			var wg sync.WaitGroup
+			for ws, client := range b.clients {
+				wg.Add(1)
+				go func(ws *websocket.Conn, client *wsClient) {
+					defer wg.Done()
+					client.writeMu.Lock()
+					ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
+					if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
+						log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
+						ws.Close()
+						b.clientsMu.Lock()
+						delete(b.clients, ws)
+						b.clientsMu.Unlock()
+					}
+					ws.SetWriteDeadline(time.Time{})
+					client.writeMu.Unlock()
+				}(ws, client)
+			}
+			b.clientsMu.Unlock()
+			wg.Wait()
+		} else {
+			b.clientsMu.Unlock()
 		}
-		b.clientsMu.Unlock()
-		wg.Wait()
 	}
 }
 
