@@ -180,18 +180,20 @@ func (b *Bridge) ServeWebSocketWithControl(ws *websocket.Conn, inputAllowed func
 		return fmt.Errorf("bridge not running")
 	}
 
-	// Check the TCP connection is still alive
-	b.conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
-	one := make([]byte, 1)
-	_, err := b.conn.Read(one)
-	b.conn.SetReadDeadline(time.Time{})
-	if err != nil && !isTimeout(err) {
-		// Connection dead -- try to reconnect
-		log.Printf("VNC bridge: TCP connection lost, reconnecting...")
-		b.conn.Close()
+	// Check if the broadcast loop is alive — if it exited, the BMC connection
+	// is dead and we need to reconnect. Skip the TCP liveness probe when the
+	// broadcast loop is running (it owns the read side of b.conn).
+	b.mu.Lock()
+	broadcastDead := b.broadcast == nil
+	b.mu.Unlock()
+	if broadcastDead {
+		// No broadcast loop — reconnect
+		log.Printf("VNC bridge: broadcast not running, reconnecting...")
+		if b.conn != nil {
+			b.conn.Close()
+		}
 		b.mu.Lock()
 		b.running = false
-		b.broadcast = nil
 		b.mu.Unlock()
 		if err := b.Start(); err != nil {
 			return fmt.Errorf("reconnect failed: %w", err)
@@ -222,10 +224,10 @@ func (b *Bridge) ServeWebSocketWithControl(ws *websocket.Conn, inputAllowed func
 
 	// Read from this client (client -> BMC) with input gating.
 	// The BMC -> client direction is handled by broadcastLoop.
-	err = b.readClientInput(ws, inputAllowed)
+	readErr := b.readClientInput(ws, inputAllowed)
 
 	log.Printf("VNC bridge: client disconnected [%d remaining]", b.clientCount())
-	return err
+	return readErr
 }
 
 // readClientInput reads VNC messages from a WebSocket client and forwards
