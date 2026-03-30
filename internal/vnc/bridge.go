@@ -125,45 +125,27 @@ func (b *Bridge) broadcastLoop() {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		// Fan out to all connected clients. For a single client,
-		// write directly to avoid goroutine overhead.
+		// Fan out to all connected clients. Each write runs in its own
+		// goroutine so the broadcast loop can continue reading from the BMC
+		// without waiting for slow clients. The per-client writeMu ensures
+		// ordered delivery within each client's WebSocket.
 		b.clientsMu.Lock()
-		clientCount := len(b.clients)
-		if clientCount == 1 {
-			for ws, client := range b.clients {
+		for ws, client := range b.clients {
+			go func(ws *websocket.Conn, client *wsClient) {
 				client.writeMu.Lock()
+				ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
-					log.Printf("VNC bridge: write failed, removing client: %v", err)
+					log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
 					ws.Close()
+					b.clientsMu.Lock()
 					delete(b.clients, ws)
+					b.clientsMu.Unlock()
 				}
+				ws.SetWriteDeadline(time.Time{})
 				client.writeMu.Unlock()
-			}
-			b.clientsMu.Unlock()
-		} else if clientCount > 1 {
-			var wg sync.WaitGroup
-			for ws, client := range b.clients {
-				wg.Add(1)
-				go func(ws *websocket.Conn, client *wsClient) {
-					defer wg.Done()
-					client.writeMu.Lock()
-					ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
-					if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
-						log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
-						ws.Close()
-						b.clientsMu.Lock()
-						delete(b.clients, ws)
-						b.clientsMu.Unlock()
-					}
-					ws.SetWriteDeadline(time.Time{})
-					client.writeMu.Unlock()
-				}(ws, client)
-			}
-			b.clientsMu.Unlock()
-			wg.Wait()
-		} else {
-			b.clientsMu.Unlock()
+			}(ws, client)
 		}
+		b.clientsMu.Unlock()
 	}
 }
 
