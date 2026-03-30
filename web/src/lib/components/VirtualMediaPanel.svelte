@@ -143,7 +143,7 @@
 					bind:value={imageUrl}
 					placeholder="https://example.com/os.iso"
 					disabled={loading}
-					class="flex-1 rounded border border-light-200 bg-white px-2 py-1 text-xs text-dark placeholder:text-light-400 focus:border-primary-400 focus:outline-none disabled:opacity-50"
+					class="flex-1 rounded border border-light-200 bg-light px-2 py-1 text-xs text-dark placeholder:text-muted focus:border-primary-400 focus:outline-none disabled:opacity-50"
 				/>
 				<Button
 					onclick={handleMount}
