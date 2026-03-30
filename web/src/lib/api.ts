@@ -355,13 +355,21 @@ export async function mountLocalISO(sessionId: string, filename: string): Promis
 	}
 }
 
-export async function requestViewerControl(sessionId: string): Promise<void> {
-	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/request-control`, { method: 'POST' });
+export async function requestViewerControl(sessionId: string, viewerId?: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/request-control`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ viewer_id: viewerId }),
+	});
 	if (!res.ok) throw new Error('Failed to request control');
 }
 
-export async function releaseViewerControl(sessionId: string): Promise<void> {
-	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/release-control`, { method: 'POST' });
+export async function releaseViewerControl(sessionId: string, viewerId?: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/release-control`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ viewer_id: viewerId }),
+	});
 	if (!res.ok) throw new Error('Failed to release control');
 }
 

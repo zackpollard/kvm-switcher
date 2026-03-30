@@ -1298,7 +1298,7 @@ func (s *Server) ensureViewerRegistry(sessionID string) *ViewerRegistry {
 }
 
 // RequestViewerControl handles POST /api/sessions/{id}/viewers/request-control.
-// The caller is identified by OIDC email or remote IP and granted input control.
+// Accepts optional {"viewer_id": "..."} body. Falls back to matching by display name.
 func (s *Server) RequestViewerControl(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	session, ok := s.Sessions.Get(id)
@@ -1307,8 +1307,7 @@ func (s *Server) RequestViewerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Identify the caller
-	displayName, userEmail, ip := s.resolveViewerIdentity(r)
+	_, userEmail, ip := s.resolveViewerIdentity(r)
 
 	s.viewerRegMu.Lock()
 	reg, ok := s.ViewerRegistries[id]
@@ -1318,16 +1317,24 @@ func (s *Server) RequestViewerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the caller's viewer ID by matching display name
-	var viewerID string
-	for _, v := range reg.List() {
-		if v.DisplayName == displayName {
-			viewerID = v.ID
-			break
+	// Try to get viewer_id from request body
+	var req struct {
+		ViewerID string `json:"viewer_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	viewerID := req.ViewerID
+	if viewerID == "" {
+		// Fall back: find a non-controlling viewer matching the caller's IP
+		for _, v := range reg.List() {
+			if v.IP == ip && !v.HasControl {
+				viewerID = v.ID
+				break
+			}
 		}
 	}
 	if viewerID == "" {
-		writeError(w, http.StatusNotFound, "viewer not found for this identity")
+		writeError(w, http.StatusNotFound, "viewer not found — pass viewer_id in request body")
 		return
 	}
 
@@ -1353,7 +1360,7 @@ func (s *Server) ReleaseViewerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	displayName, userEmail, ip := s.resolveViewerIdentity(r)
+	_, userEmail, ip := s.resolveViewerIdentity(r)
 
 	s.viewerRegMu.Lock()
 	reg, ok := s.ViewerRegistries[id]
@@ -1363,15 +1370,23 @@ func (s *Server) ReleaseViewerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var viewerID string
-	for _, v := range reg.List() {
-		if v.DisplayName == displayName {
-			viewerID = v.ID
-			break
+	var req struct {
+		ViewerID string `json:"viewer_id"`
+	}
+	json.NewDecoder(r.Body).Decode(&req)
+
+	viewerID := req.ViewerID
+	if viewerID == "" {
+		// Fall back: find the controlling viewer matching the caller's IP
+		for _, v := range reg.List() {
+			if v.IP == ip && v.HasControl {
+				viewerID = v.ID
+				break
+			}
 		}
 	}
 	if viewerID == "" {
-		writeError(w, http.StatusNotFound, "viewer not found for this identity")
+		writeError(w, http.StatusNotFound, "viewer not found — pass viewer_id in request body")
 		return
 	}
 

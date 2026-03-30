@@ -25,7 +25,7 @@
 	let viewers = $derived(session?.viewers || []);
 	let viewerCount = $derived(session?.viewer_count || 0);
 	let hasControl = $derived(
-		viewerCount <= 1 || viewers.some((v) => v.has_control && v.display_name === currentUser)
+		viewerCount <= 1 || viewers.some((v) => v.has_control && (v.display_name === currentUser || currentUser === 'You'))
 	);
 
 	async function loadSession() {
@@ -226,7 +226,7 @@
 		</div>
 
 		<div class="flex items-center gap-2">
-			{#if viewerCount > 1}
+			{#if viewerCount > 0}
 				<ViewerPresence
 					{viewers}
 					currentUserName={currentUser}

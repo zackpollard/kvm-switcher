@@ -13,21 +13,19 @@
 	let requesting = $state(false);
 	let error = $state('');
 
-	let currentViewer = $derived(
-		viewers.find((v) => v.display_name === currentUserName)
-	);
-	let hasControl = $derived(currentViewer?.has_control ?? false);
 	let controller = $derived(viewers.find((v) => v.has_control));
+	let nonControllers = $derived(viewers.filter((v) => !v.has_control));
 
 	function getInitial(name: string): string {
+		if (name.includes('.')) return name.split('.')[0].charAt(0).toUpperCase(); // IP: use first octet
 		return (name.charAt(0) || '?').toUpperCase();
 	}
 
-	async function handleRequestControl() {
+	async function handleRequestControl(viewerId: string) {
 		requesting = true;
 		error = '';
 		try {
-			await requestViewerControl(sessionId);
+			await requestViewerControl(sessionId, viewerId);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to request control';
 		} finally {
@@ -35,11 +33,11 @@
 		}
 	}
 
-	async function handleReleaseControl() {
+	async function handleReleaseControl(viewerId: string) {
 		requesting = true;
 		error = '';
 		try {
-			await releaseViewerControl(sessionId);
+			await releaseViewerControl(sessionId, viewerId);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to release control';
 		} finally {
@@ -49,7 +47,7 @@
 </script>
 
 <div class="flex items-center gap-2" role="status" aria-label="Connected viewers">
-	<span class="text-xs text-muted">{viewers.length} viewers</span>
+	<span class="text-xs text-muted">{viewers.length} {viewers.length === 1 ? 'viewer' : 'viewers'}</span>
 
 	<div class="flex items-center -space-x-1">
 		{#each viewers as viewer (viewer.id)}
@@ -65,28 +63,31 @@
 		{/each}
 	</div>
 
-	{#if hasControl}
-		<Button
-			style="border-radius: 0.75rem"
-			onclick={handleReleaseControl}
-			disabled={requesting}
-			size="tiny"
-			variant="ghost"
-			color="secondary"
-		>
-			{requesting ? 'Releasing...' : 'Release Control'}
-		</Button>
-	{:else}
-		<Button
-			style="border-radius: 0.75rem"
-			onclick={handleRequestControl}
-			disabled={requesting}
-			size="tiny"
-			variant="ghost"
-			color="primary"
-		>
-			{requesting ? 'Requesting...' : 'Request Control'}
-		</Button>
+	{#if viewers.length > 1}
+		{#if controller}
+			<Button
+				style="border-radius: 0.75rem"
+				onclick={() => handleReleaseControl(controller.id)}
+				disabled={requesting}
+				size="tiny"
+				variant="ghost"
+				color="secondary"
+			>
+				{requesting ? 'Releasing...' : 'Release Control'}
+			</Button>
+		{/if}
+		{#each nonControllers as viewer (viewer.id)}
+			<Button
+				style="border-radius: 0.75rem"
+				onclick={() => handleRequestControl(viewer.id)}
+				disabled={requesting}
+				size="tiny"
+				variant="ghost"
+				color="primary"
+			>
+				{requesting ? 'Requesting...' : `Give Control to ${viewer.display_name}`}
+			</Button>
+		{/each}
 	{/if}
 
 	{#if error}
