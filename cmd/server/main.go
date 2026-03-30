@@ -178,6 +178,9 @@ func main() {
 		mux.Handle("POST /api/isos", rateLimited(http.HandlerFunc(srv.UploadISO)))
 		mux.Handle("DELETE /api/isos/{name}", rateLimited(http.HandlerFunc(srv.DeleteISO)))
 		mux.HandleFunc("GET /api/isos/{name}/download", srv.DownloadISO)
+		mux.Handle("POST /api/isos/download", rateLimited(http.HandlerFunc(srv.DownloadISOFromURL)))
+		mux.HandleFunc("GET /api/isos/downloads", srv.ListISODownloads)
+		mux.HandleFunc("GET /api/isos/downloads/{id}", srv.GetISODownload)
 		mux.Handle("POST /api/sessions/{id}/virtual-media/mount-local", rateLimited(http.HandlerFunc(srv.MountLocalISO)))
 	}
 

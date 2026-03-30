@@ -8,17 +8,34 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/zackpollard/kvm-switcher/internal/models"
 	kvmoidc "github.com/zackpollard/kvm-switcher/internal/oidc"
 )
 
 var validISOFilename = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
+// ISODownload tracks the progress of a background ISO download from a URL.
+type ISODownload struct {
+	ID         string    `json:"id"`
+	Filename   string    `json:"filename"`
+	URL        string    `json:"url"`
+	TotalBytes int64     `json:"total_bytes"`
+	Downloaded int64     `json:"downloaded"`
+	Status     string    `json:"status"` // "downloading", "complete", "error"
+	Error      string    `json:"error,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+
+	downloaded atomic.Int64 // internal atomic counter for thread-safe progress updates
+}
 
 // sanitizeISOFilename validates an ISO filename for safety.
 func sanitizeISOFilename(name string) error {
@@ -460,4 +477,264 @@ func userFromRequest(r *http.Request) *models.UserInfo {
 		return user
 	}
 	return nil
+}
+
+// DownloadISOFromURL starts a background download of an ISO from a remote URL.
+// POST /api/isos/download
+func (s *Server) DownloadISOFromURL(w http.ResponseWriter, r *http.Request) {
+	if s.DB == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	var req struct {
+		URL      string `json:"url"`
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.URL == "" {
+		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+
+	// Validate URL scheme
+	parsed, err := url.Parse(req.URL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid URL")
+		return
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		writeError(w, http.StatusBadRequest, "only http and https URLs are supported")
+		return
+	}
+
+	// Determine filename
+	filename := req.Filename
+	if filename == "" {
+		// Extract from URL path
+		segments := strings.Split(strings.TrimRight(parsed.Path, "/"), "/")
+		if len(segments) > 0 {
+			filename = segments[len(segments)-1]
+		}
+	}
+	if filename == "" {
+		writeError(w, http.StatusBadRequest, "could not determine filename from URL; please provide a filename")
+		return
+	}
+
+	// Sanitize filename
+	if err := sanitizeISOFilename(filename); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Check if file already exists in DB
+	existing, err := s.DB.GetISO(filename)
+	if err != nil {
+		log.Printf("DownloadISOFromURL: DB check failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if existing != nil {
+		writeError(w, http.StatusConflict, fmt.Sprintf("ISO %q already exists", filename))
+		return
+	}
+
+	// Check if a download for this filename is already in progress
+	s.downloadsMu.Lock()
+	for _, dl := range s.Downloads {
+		if dl.Filename == filename && dl.Status == "downloading" {
+			s.downloadsMu.Unlock()
+			writeError(w, http.StatusConflict, fmt.Sprintf("download for %q is already in progress", filename))
+			return
+		}
+	}
+	s.downloadsMu.Unlock()
+
+	// Create download tracker
+	dlID := uuid.New().String()
+	dl := &ISODownload{
+		ID:        dlID,
+		Filename:  filename,
+		URL:       req.URL,
+		Status:    "downloading",
+		StartedAt: time.Now(),
+	}
+
+	s.downloadsMu.Lock()
+	s.Downloads[dlID] = dl
+	s.downloadsMu.Unlock()
+
+	// Determine uploader
+	var uploadedBy string
+	if user := userFromRequest(r); user != nil {
+		uploadedBy = user.Email
+	}
+
+	// Start background download
+	go s.performISODownload(dl, uploadedBy, r.RemoteAddr)
+
+	writeJSON(w, http.StatusAccepted, dl)
+}
+
+// performISODownload runs the actual HTTP download in a background goroutine.
+func (s *Server) performISODownload(dl *ISODownload, uploadedBy, remoteAddr string) {
+	isoDir := s.Config.Settings.ISODir
+	destPath := filepath.Join(isoDir, dl.Filename)
+
+	// Helper to mark download as failed and clean up
+	fail := func(msg string) {
+		os.Remove(destPath)
+		s.downloadsMu.Lock()
+		dl.Status = "error"
+		dl.Error = msg
+		s.downloadsMu.Unlock()
+		log.Printf("ISO download failed (%s): %s", dl.Filename, msg)
+	}
+
+	// Make HTTP GET request
+	resp, err := http.Get(dl.URL)
+	if err != nil {
+		fail(fmt.Sprintf("HTTP request failed: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fail(fmt.Sprintf("remote server returned %d %s", resp.StatusCode, resp.Status))
+		return
+	}
+
+	// Read Content-Length if available
+	if resp.ContentLength > 0 {
+		s.downloadsMu.Lock()
+		dl.TotalBytes = resp.ContentLength
+		s.downloadsMu.Unlock()
+	}
+
+	// Check total storage limit
+	isos, err := s.DB.ListISOs()
+	if err != nil {
+		fail(fmt.Sprintf("database error: %v", err))
+		return
+	}
+	var totalSize int64
+	for _, iso := range isos {
+		totalSize += iso.SizeBytes
+	}
+	maxTotalBytes := int64(s.Config.Settings.ISOMaxSizeGB) * 1024 * 1024 * 1024
+	if resp.ContentLength > 0 && totalSize+resp.ContentLength > maxTotalBytes {
+		fail(fmt.Sprintf("download would exceed total ISO storage limit of %d GB", s.Config.Settings.ISOMaxSizeGB))
+		return
+	}
+
+	// Create destination file atomically
+	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			fail(fmt.Sprintf("file %q already exists on disk", dl.Filename))
+		} else {
+			fail(fmt.Sprintf("failed to create file: %v", err))
+		}
+		return
+	}
+
+	hasher := sha256.New()
+
+	// progressWriter wraps io.Writer to track bytes downloaded
+	pw := &progressWriter{
+		w:  io.MultiWriter(out, hasher),
+		dl: dl,
+	}
+
+	written, err := io.Copy(pw, resp.Body)
+	if closeErr := out.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		fail(fmt.Sprintf("download write failed: %v", err))
+		return
+	}
+
+	// Re-check size limit with actual bytes
+	if totalSize+written > maxTotalBytes {
+		os.Remove(destPath)
+		fail(fmt.Sprintf("download exceeds total ISO storage limit of %d GB", s.Config.Settings.ISOMaxSizeGB))
+		return
+	}
+
+	sha256sum := hex.EncodeToString(hasher.Sum(nil))
+
+	// Insert into DB
+	if err := s.DB.InsertISO(dl.Filename, written, sha256sum, uploadedBy); err != nil {
+		os.Remove(destPath)
+		fail(fmt.Sprintf("failed to record ISO metadata: %v", err))
+		return
+	}
+
+	// Mark as complete
+	s.downloadsMu.Lock()
+	dl.Status = "complete"
+	dl.Downloaded = written
+	s.downloadsMu.Unlock()
+
+	// Audit log
+	s.logAudit("iso.download_url", uploadedBy, "", "", remoteAddr, map[string]any{
+		"filename":   dl.Filename,
+		"url":        dl.URL,
+		"size_bytes": written,
+		"sha256":     sha256sum,
+	})
+
+	log.Printf("ISO downloaded from URL: %s (%d bytes, sha256=%s)", dl.Filename, written, sha256sum)
+}
+
+// progressWriter wraps an io.Writer and updates an ISODownload's progress atomically.
+type progressWriter struct {
+	w  io.Writer
+	dl *ISODownload
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n, err := pw.w.Write(p)
+	if n > 0 {
+		newVal := pw.dl.downloaded.Add(int64(n))
+		// Periodically snapshot to the exported field (read by JSON serialization)
+		pw.dl.Downloaded = newVal
+	}
+	return n, err
+}
+
+// ListISODownloads returns all active and recent download statuses.
+// GET /api/isos/downloads
+func (s *Server) ListISODownloads(w http.ResponseWriter, r *http.Request) {
+	s.downloadsMu.Lock()
+	downloads := make([]*ISODownload, 0, len(s.Downloads))
+	for _, dl := range s.Downloads {
+		downloads = append(downloads, dl)
+	}
+	s.downloadsMu.Unlock()
+
+	writeJSON(w, http.StatusOK, downloads)
+}
+
+// GetISODownload returns a single download's progress.
+// GET /api/isos/downloads/{id}
+func (s *Server) GetISODownload(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	s.downloadsMu.Lock()
+	dl, ok := s.Downloads[id]
+	s.downloadsMu.Unlock()
+
+	if !ok {
+		writeError(w, http.StatusNotFound, "download not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, dl)
 }

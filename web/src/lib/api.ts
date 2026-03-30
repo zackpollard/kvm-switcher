@@ -303,6 +303,36 @@ export async function deleteISO(name: string): Promise<void> {
 	}
 }
 
+export interface ISODownloadStatus {
+	id: string;
+	filename: string;
+	url: string;
+	total_bytes: number;
+	downloaded: number;
+	status: string; // "downloading" | "complete" | "error"
+	error?: string;
+	started_at: string;
+}
+
+export async function downloadISOFromURL(url: string, filename?: string): Promise<ISODownloadStatus> {
+	const res = await fetch(`${API_BASE}/isos/download`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ url, filename: filename || undefined }),
+	});
+	if (!res.ok) {
+		const data = await res.json().catch(() => ({ error: res.statusText }));
+		throw new Error(data.error || 'Download failed');
+	}
+	return res.json();
+}
+
+export async function fetchISODownloads(): Promise<ISODownloadStatus[]> {
+	const res = await fetch(`${API_BASE}/isos/downloads`);
+	if (!res.ok) throw new Error('Failed to fetch downloads');
+	return res.json();
+}
+
 export async function mountLocalISO(sessionId: string, filename: string): Promise<void> {
 	const res = await fetch(`${API_BASE}/sessions/${sessionId}/virtual-media/mount-local`, {
 		method: 'POST',

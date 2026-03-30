@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { fetchISOs, uploadISO, deleteISO, type ISOFile, type ISOListResponse } from '$lib/api';
+	import { fetchISOs, uploadISO, deleteISO, downloadISOFromURL, fetchISODownloads, type ISOFile, type ISOListResponse, type ISODownloadStatus } from '$lib/api';
 	import { Button, LoadingSpinner } from '@immich/ui';
 
 	let data: ISOListResponse | null = $state(null);
@@ -17,6 +17,14 @@
 	let deleting = $state<string | null>(null);
 
 	let fileInput: HTMLInputElement;
+
+	// URL download state
+	let downloadUrl = $state('');
+	let downloadFilename = $state('');
+	let downloadError = $state('');
+	let downloadSubmitting = $state(false);
+	let activeDownloads = $state<ISODownloadStatus[]>([]);
+	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 	function formatBytes(bytes: number): string {
 		if (bytes === 0) return '0 B';
@@ -47,6 +55,11 @@
 	function storagePercent(): number {
 		if (!data || data.max_size_bytes === 0) return 0;
 		return Math.round((data.total_size_bytes / data.max_size_bytes) * 100);
+	}
+
+	function downloadPercent(dl: ISODownloadStatus): number {
+		if (dl.total_bytes <= 0 || dl.downloaded <= 0) return 0;
+		return Math.min(100, Math.round((dl.downloaded / dl.total_bytes) * 100));
 	}
 
 	async function loadISOs() {
@@ -125,8 +138,78 @@
 		deleteConfirm = null;
 	}
 
+	async function handleURLDownload() {
+		if (!downloadUrl.trim()) {
+			downloadError = 'Please enter a URL.';
+			return;
+		}
+
+		downloadSubmitting = true;
+		downloadError = '';
+
+		try {
+			const result = await downloadISOFromURL(downloadUrl.trim(), downloadFilename.trim() || undefined);
+			activeDownloads = [...activeDownloads, result];
+			downloadUrl = '';
+			downloadFilename = '';
+			startPolling();
+		} catch (e) {
+			downloadError = e instanceof Error ? e.message : 'Download request failed';
+		} finally {
+			downloadSubmitting = false;
+		}
+	}
+
+	async function pollDownloads() {
+		try {
+			const downloads = await fetchISODownloads();
+			const prevDownloading = activeDownloads.filter(d => d.status === 'downloading');
+			activeDownloads = downloads;
+
+			// Check if any previously-downloading items just completed
+			const nowComplete = downloads.filter(d => d.status === 'complete');
+			const wasDownloading = prevDownloading.some(pd =>
+				nowComplete.some(nc => nc.id === pd.id)
+			);
+			if (wasDownloading) {
+				await loadISOs();
+			}
+
+			// Stop polling if no active downloads
+			const hasActive = downloads.some(d => d.status === 'downloading');
+			if (!hasActive) {
+				stopPolling();
+			}
+		} catch {
+			// Silently ignore poll errors
+		}
+	}
+
+	function startPolling() {
+		if (pollTimer) return;
+		pollTimer = setInterval(pollDownloads, 2000);
+	}
+
+	function stopPolling() {
+		if (pollTimer) {
+			clearInterval(pollTimer);
+			pollTimer = null;
+		}
+	}
+
 	$effect(() => {
 		loadISOs();
+		// Check for any in-progress downloads on load
+		fetchISODownloads().then(downloads => {
+			activeDownloads = downloads;
+			if (downloads.some(d => d.status === 'downloading')) {
+				startPolling();
+			}
+		}).catch(() => {});
+
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 
@@ -219,6 +302,107 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Download from URL -->
+	<div class="mb-6 rounded-lg border border-light-200 bg-light-50 p-4">
+		<h3 class="mb-3 text-sm font-medium text-dark">Download from URL</h3>
+		<div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+			<div class="flex-1">
+				<label for="download-url" class="mb-1 block text-xs text-muted">ISO URL</label>
+				<input
+					id="download-url"
+					type="url"
+					bind:value={downloadUrl}
+					placeholder="https://releases.ubuntu.com/22.04/ubuntu-22.04.4-live-server-amd64.iso"
+					disabled={downloadSubmitting}
+					class="w-full rounded-md border border-light-300 bg-white px-3 py-2 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+				/>
+			</div>
+			<div class="sm:w-48">
+				<label for="download-filename" class="mb-1 block text-xs text-muted">Filename (optional)</label>
+				<input
+					id="download-filename"
+					type="text"
+					bind:value={downloadFilename}
+					placeholder="auto-detect from URL"
+					disabled={downloadSubmitting}
+					class="w-full rounded-md border border-light-300 bg-white px-3 py-2 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+				/>
+			</div>
+			<Button
+				onclick={handleURLDownload}
+				disabled={downloadSubmitting || !downloadUrl.trim()}
+				size="small"
+				variant="filled"
+				color="primary"
+				loading={downloadSubmitting}
+			>
+				Download
+			</Button>
+		</div>
+		{#if downloadError}
+			<p class="mt-2 text-sm text-danger">{downloadError}</p>
+		{/if}
+	</div>
+
+	<!-- Active downloads -->
+	{#if activeDownloads.length > 0}
+		<div class="mb-6 space-y-3">
+			{#each activeDownloads as dl (dl.id)}
+				<div class="rounded-lg border {dl.status === 'error' ? 'border-danger-200 bg-danger-50' : dl.status === 'complete' ? 'border-success-200 bg-success-50' : 'border-primary-200 bg-primary-50/10'} p-4">
+					<div class="flex items-center justify-between">
+						<div class="flex items-center gap-2">
+							{#if dl.status === 'downloading'}
+								<LoadingSpinner size="tiny" />
+							{:else if dl.status === 'complete'}
+								<svg class="h-4 w-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+								</svg>
+							{:else}
+								<svg class="h-4 w-4 text-danger" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+								</svg>
+							{/if}
+							<span class="text-sm font-medium text-dark">{dl.filename}</span>
+						</div>
+						<span class="text-xs text-muted">
+							{#if dl.status === 'downloading'}
+								{formatBytes(dl.downloaded)}{#if dl.total_bytes > 0} / {formatBytes(dl.total_bytes)}{/if}
+							{:else if dl.status === 'complete'}
+								Complete - {formatBytes(dl.downloaded)}
+							{:else}
+								Failed
+							{/if}
+						</span>
+					</div>
+					{#if dl.status === 'downloading'}
+						<div class="mt-2">
+							{#if dl.total_bytes > 0}
+								<div class="flex items-center gap-2">
+									<div class="h-2 flex-1 overflow-hidden rounded-full bg-light-200">
+										<div
+											class="h-full rounded-full bg-primary transition-all"
+											style="width: {downloadPercent(dl)}%"
+										></div>
+									</div>
+									<span class="text-xs text-muted">{downloadPercent(dl)}%</span>
+								</div>
+							{:else}
+								<div class="h-2 w-full overflow-hidden rounded-full bg-light-200">
+									<div class="h-full w-1/3 animate-pulse rounded-full bg-primary"></div>
+								</div>
+								<p class="mt-1 text-xs text-muted">Downloading... (total size unknown)</p>
+							{/if}
+						</div>
+					{/if}
+					{#if dl.status === 'error' && dl.error}
+						<p class="mt-2 text-xs text-danger">{dl.error}</p>
+					{/if}
+					<p class="mt-1 text-xs text-light-400 truncate" title={dl.url}>{dl.url}</p>
+				</div>
+			{/each}
+		</div>
+	{/if}
 
 	<!-- Upload messages -->
 	{#if uploadSuccess}

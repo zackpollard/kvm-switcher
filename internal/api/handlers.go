@@ -41,6 +41,9 @@ type Server struct {
 	bridgesMu    sync.Mutex
 	VNCBridges   map[string]*vnc.Bridge         // active VNC bridges by session ID
 	vncConnsMu   sync.Mutex
+
+	Downloads    map[string]*ISODownload        // active ISO downloads by download ID
+	downloadsMu  sync.Mutex
 }
 
 // NewServer creates a new API server with an in-memory session store and starts background pollers.
@@ -60,6 +63,7 @@ func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInter
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
 		Bridges:  make(map[string]*ikvm.Bridge),
 		VNCBridges: make(map[string]*vnc.Bridge),
+		Downloads:  make(map[string]*ISODownload),
 		StatusCache: sc,
 		AuditDB:     auditDB,
 		DB:          db,
@@ -79,6 +83,7 @@ func newServerCore(cfg *models.AppConfig) *Server {
 		BMCCreds:    make(map[string]*models.BMCCredEntry),
 		Bridges:  make(map[string]*ikvm.Bridge),
 		VNCBridges: make(map[string]*vnc.Bridge),
+		Downloads:  make(map[string]*ISODownload),
 		StatusCache: sc,
 	}
 }
