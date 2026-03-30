@@ -125,27 +125,37 @@ func (b *Bridge) broadcastLoop() {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		// Fan out to all connected clients. Each write runs in its own
-		// goroutine so the broadcast loop can continue reading from the BMC
-		// without waiting for slow clients. The per-client writeMu ensures
-		// ordered delivery within each client's WebSocket.
+		// Fan out to all connected clients concurrently but wait for all
+		// writes to complete before reading the next BMC chunk. This ensures
+		// correct ordering of VNC data within each client's stream.
 		b.clientsMu.Lock()
+		var toRemove []*websocket.Conn
+		var wg sync.WaitGroup
 		for ws, client := range b.clients {
+			wg.Add(1)
 			go func(ws *websocket.Conn, client *wsClient) {
-				client.writeMu.Lock()
+				defer wg.Done()
 				ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
-					log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
+					log.Printf("VNC bridge: broadcast write failed: %v", err)
 					ws.Close()
 					b.clientsMu.Lock()
-					delete(b.clients, ws)
+					toRemove = append(toRemove, ws)
 					b.clientsMu.Unlock()
 				}
 				ws.SetWriteDeadline(time.Time{})
-				client.writeMu.Unlock()
 			}(ws, client)
 		}
 		b.clientsMu.Unlock()
+		wg.Wait()
+		// Clean up failed clients after all writes complete
+		if len(toRemove) > 0 {
+			b.clientsMu.Lock()
+			for _, ws := range toRemove {
+				delete(b.clients, ws)
+			}
+			b.clientsMu.Unlock()
+		}
 	}
 }
 
