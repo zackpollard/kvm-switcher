@@ -315,7 +315,7 @@
 					bind:value={downloadUrl}
 					placeholder="https://releases.ubuntu.com/22.04/ubuntu-22.04.4-live-server-amd64.iso"
 					disabled={downloadSubmitting}
-					class="w-full rounded-md border border-light-200 bg-light px-3 py-2 text-sm text-dark placeholder:text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+					class="w-full rounded-md border border-light-200 bg-light px-3 py-2 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
 				/>
 			</div>
 			<div class="sm:w-48">
@@ -326,7 +326,7 @@
 					bind:value={downloadFilename}
 					placeholder="auto-detect from URL"
 					disabled={downloadSubmitting}
-					class="w-full rounded-md border border-light-200 bg-light px-3 py-2 text-sm text-dark placeholder:text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+					class="w-full rounded-md border border-light-200 bg-light px-3 py-2 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
 				/>
 			</div>
 			<Button

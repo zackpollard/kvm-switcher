@@ -124,7 +124,7 @@
 					type="text"
 					bind:value={filterEventType}
 					placeholder="e.g. session_create"
-					class="h-9 rounded-md border border-light-200 bg-light px-3 text-sm text-dark placeholder:text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+					class="h-9 rounded-md border border-light-200 bg-light px-3 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
 				/>
 			</div>
 			<div class="flex flex-col gap-1">
@@ -134,7 +134,7 @@
 					type="text"
 					bind:value={filterServerName}
 					placeholder="e.g. brock"
-					class="h-9 rounded-md border border-light-200 bg-light px-3 text-sm text-dark placeholder:text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+					class="h-9 rounded-md border border-light-200 bg-light px-3 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
 				/>
 			</div>
 			<div class="flex flex-col gap-1">
@@ -144,7 +144,7 @@
 					type="text"
 					bind:value={filterUserEmail}
 					placeholder="e.g. admin@example.com"
-					class="h-9 rounded-md border border-light-200 bg-light px-3 text-sm text-dark placeholder:text-muted focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+					class="h-9 rounded-md border border-light-200 bg-light px-3 text-sm text-dark placeholder:text-light-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
 				/>
 			</div>
 			<div class="flex gap-2">
