@@ -7,13 +7,23 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/models"
 )
 
+// ControlRequest represents a pending request to take over input control.
+type ControlRequest struct {
+	RequesterID   string    `json:"requester_id"`
+	RequesterName string    `json:"requester_name"`
+	RequestedAt   time.Time `json:"requested_at"`
+	TimeoutSec    int       `json:"timeout_sec"`
+}
+
 // ViewerRegistry tracks connected viewers for a single KVM session.
 // Thread-safe; all methods may be called concurrently.
 type ViewerRegistry struct {
-	mu         sync.RWMutex
-	viewers    map[string]*models.Viewer
-	controller string   // viewer ID of current controller
-	order      []string // connection order for auto-transfer
+	mu             sync.RWMutex
+	viewers        map[string]*models.Viewer
+	controller     string   // viewer ID of current controller
+	order          []string // connection order for auto-transfer
+	pendingRequest *ControlRequest
+	requestTimer   *time.Timer
 }
 
 // NewViewerRegistry creates an empty viewer registry.
@@ -94,17 +104,90 @@ func (vr *ViewerRegistry) List() []*models.Viewer {
 	return result
 }
 
-// RequestControl grants input control to the specified viewer.
-// Returns true if the viewer exists and control was granted.
-func (vr *ViewerRegistry) RequestControl(id string) bool {
+// RequestControl creates a pending control request. The controller must
+// accept or deny it. If no response within timeoutSec, control transfers
+// automatically. Returns true if the request was created.
+func (vr *ViewerRegistry) RequestControl(id string, timeoutSec int) bool {
 	vr.mu.Lock()
 	defer vr.mu.Unlock()
 
-	if _, ok := vr.viewers[id]; !ok {
+	v, ok := vr.viewers[id]
+	if !ok {
 		return false
 	}
-	vr.controller = id
+	if vr.controller == id {
+		return false // already has control
+	}
+
+	// Cancel any existing pending request
+	if vr.requestTimer != nil {
+		vr.requestTimer.Stop()
+	}
+
+	vr.pendingRequest = &ControlRequest{
+		RequesterID:   id,
+		RequesterName: v.DisplayName,
+		RequestedAt:   time.Now(),
+		TimeoutSec:    timeoutSec,
+	}
+
+	// Auto-grant on timeout
+	vr.requestTimer = time.AfterFunc(time.Duration(timeoutSec)*time.Second, func() {
+		vr.mu.Lock()
+		defer vr.mu.Unlock()
+		if vr.pendingRequest != nil && vr.pendingRequest.RequesterID == id {
+			if _, stillHere := vr.viewers[id]; stillHere {
+				vr.controller = id
+			}
+			vr.pendingRequest = nil
+		}
+	})
+
 	return true
+}
+
+// AcceptControlRequest grants control to the pending requester.
+func (vr *ViewerRegistry) AcceptControlRequest() bool {
+	vr.mu.Lock()
+	defer vr.mu.Unlock()
+
+	if vr.pendingRequest == nil {
+		return false
+	}
+	if _, ok := vr.viewers[vr.pendingRequest.RequesterID]; !ok {
+		vr.pendingRequest = nil
+		return false
+	}
+	vr.controller = vr.pendingRequest.RequesterID
+	vr.pendingRequest = nil
+	if vr.requestTimer != nil {
+		vr.requestTimer.Stop()
+		vr.requestTimer = nil
+	}
+	return true
+}
+
+// DenyControlRequest denies the pending request.
+func (vr *ViewerRegistry) DenyControlRequest() {
+	vr.mu.Lock()
+	defer vr.mu.Unlock()
+
+	vr.pendingRequest = nil
+	if vr.requestTimer != nil {
+		vr.requestTimer.Stop()
+		vr.requestTimer = nil
+	}
+}
+
+// PendingRequest returns the current pending control request, or nil.
+func (vr *ViewerRegistry) PendingRequest() *ControlRequest {
+	vr.mu.RLock()
+	defer vr.mu.RUnlock()
+	if vr.pendingRequest == nil {
+		return nil
+	}
+	cp := *vr.pendingRequest
+	return &cp
 }
 
 // ReleaseControl releases input control from the specified viewer and

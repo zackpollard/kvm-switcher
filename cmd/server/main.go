@@ -184,6 +184,8 @@ func main() {
 		mux.Handle("POST /api/sessions/{id}/virtual-media/mount-local", rateLimited(http.HandlerFunc(srv.MountLocalISO)))
 		mux.Handle("POST /api/sessions/{id}/viewers/request-control", rateLimited(http.HandlerFunc(srv.RequestViewerControl)))
 		mux.Handle("POST /api/sessions/{id}/viewers/release-control", rateLimited(http.HandlerFunc(srv.ReleaseViewerControl)))
+		mux.Handle("POST /api/sessions/{id}/viewers/accept-control", rateLimited(http.HandlerFunc(srv.AcceptControlRequest)))
+		mux.Handle("POST /api/sessions/{id}/viewers/deny-control", rateLimited(http.HandlerFunc(srv.DenyControlRequest)))
 	}
 
 	if oidcProvider != nil {

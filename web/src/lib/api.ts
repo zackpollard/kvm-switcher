@@ -30,6 +30,7 @@ export interface KVMSession {
 	idle_timeout_remaining_seconds?: number;
 	viewers?: Viewer[];
 	viewer_count?: number;
+	pending_control_request?: PendingControlRequest;
 }
 
 const API_BASE = '/api';
@@ -360,6 +361,13 @@ export async function mountLocalISO(sessionId: string, filename: string): Promis
 	}
 }
 
+export interface PendingControlRequest {
+	requester_id: string;
+	requester_name: string;
+	requested_at: string;
+	timeout_sec: number;
+}
+
 export async function requestViewerControl(sessionId: string, viewerId?: string): Promise<void> {
 	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/request-control`, {
 		method: 'POST',
@@ -376,6 +384,16 @@ export async function releaseViewerControl(sessionId: string, viewerId?: string)
 		body: JSON.stringify({ viewer_id: viewerId }),
 	});
 	if (!res.ok) throw new Error('Failed to release control');
+}
+
+export async function acceptControlRequest(sessionId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/accept-control`, { method: 'POST' });
+	if (!res.ok) throw new Error('Failed to accept control request');
+}
+
+export async function denyControlRequest(sessionId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/sessions/${sessionId}/viewers/deny-control`, { method: 'POST' });
+	if (!res.ok) throw new Error('Failed to deny control request');
 }
 
 export interface AuthStatus {

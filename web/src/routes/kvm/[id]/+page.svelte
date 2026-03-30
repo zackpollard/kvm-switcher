@@ -233,6 +233,7 @@
 					currentUserName={currentUser}
 					sessionId={activeSessionId}
 					myViewerId={myViewerId}
+					pendingRequest={session?.pending_control_request}
 				/>
 				<div class="mx-1 h-5 w-px bg-light-200" aria-hidden="true"></div>
 			{/if}

@@ -407,6 +407,7 @@ type sessionResponse struct {
 	IdleTimeoutRemaining *float64         `json:"idle_timeout_remaining_seconds,omitempty"`
 	Viewers              []*models.Viewer `json:"viewers,omitempty"`
 	ViewerCount          int              `json:"viewer_count"`
+	PendingControlReq    *ControlRequest  `json:"pending_control_request,omitempty"`
 }
 
 // GetSession godoc
@@ -444,6 +445,7 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request) {
 	if reg != nil {
 		resp.Viewers = reg.List()
 		resp.ViewerCount = reg.Count()
+		resp.PendingControlReq = reg.PendingRequest()
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -1338,16 +1340,65 @@ func (s *Server) RequestViewerControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !reg.RequestControl(viewerID) {
-		writeError(w, http.StatusConflict, "failed to grant control")
+	if !reg.RequestControl(viewerID, 30) {
+		writeError(w, http.StatusConflict, "failed to request control")
 		return
 	}
 
-	s.logAudit("kvm_control_transfer", userEmail, session.ServerName, id, ip, map[string]string{
+	s.logAudit("kvm_control_request", userEmail, session.ServerName, id, ip, map[string]string{
 		"viewer_id": viewerID,
 	})
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "controller": viewerID})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "pending", "viewer_id": viewerID})
+}
+
+// AcceptControlRequest handles POST /api/sessions/{id}/viewers/accept-control.
+func (s *Server) AcceptControlRequest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	session, ok := s.Sessions.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	_, userEmail, ip := s.resolveViewerIdentity(r)
+
+	s.viewerRegMu.Lock()
+	reg, ok := s.ViewerRegistries[id]
+	s.viewerRegMu.Unlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "no viewers connected")
+		return
+	}
+
+	if !reg.AcceptControlRequest() {
+		writeError(w, http.StatusNotFound, "no pending control request")
+		return
+	}
+
+	s.logAudit("kvm_control_transfer", userEmail, session.ServerName, id, ip, nil)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// DenyControlRequest handles POST /api/sessions/{id}/viewers/deny-control.
+func (s *Server) DenyControlRequest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_, ok := s.Sessions.Get(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	s.viewerRegMu.Lock()
+	reg, ok := s.ViewerRegistries[id]
+	s.viewerRegMu.Unlock()
+	if !ok {
+		writeError(w, http.StatusNotFound, "no viewers connected")
+		return
+	}
+
+	reg.DenyControlRequest()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ReleaseViewerControl handles POST /api/sessions/{id}/viewers/release-control.
