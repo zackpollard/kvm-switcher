@@ -378,11 +378,14 @@ func (s *Server) ensureVNCBridge(session *models.KVMSession) (*vncbridge.Bridge,
 
 	bridge = vncbridge.NewBridge(session.KVMTarget, session.KVMPassword)
 
-	// iDRAC8 needs encoding filtering (Raw only) — its VNC server fails
-	// silently with Tight/ZRLE. iDRAC9 handles all encodings fine.
+	// iDRAC8 needs special handling: Raw-only encodings (its VNC server
+	// fails silently with Tight/ZRLE) and ServerInit name rewrite to
+	// trigger noVNC's 8bpp mode. iDRAC9 handles all encodings fine and
+	// should use its native pixel format for best performance.
 	for _, srv := range s.Config.Servers {
 		if srv.Name == session.ServerName && srv.BoardType == "dell_idrac8" {
 			bridge.FilterEncodings = true
+			bridge.RewriteName = true
 			break
 		}
 	}

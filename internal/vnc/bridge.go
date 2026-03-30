@@ -29,6 +29,7 @@ type Bridge struct {
 	connWriteMu     sync.Mutex // serialise writes to b.conn from multiple clients
 	serverInit      []byte     // saved for replay to new clients
 	FilterEncodings bool       // true = rewrite SetEncodings to Raw only (iDRAC8)
+	RewriteName     bool       // true = rewrite ServerInit name to Intel AMT (iDRAC8 8bpp)
 
 	mu      sync.Mutex
 	running bool
@@ -376,13 +377,17 @@ func (b *Bridge) clientHandshake(ws *websocket.Conn) error {
 	ws.WriteMessage(websocket.BinaryMessage, []byte{0, 0, 0, 0}) // OK
 	if _, _, err := ws.ReadMessage(); err != nil { return err } // ClientInit
 
-	// Send ServerInit with rewritten name for noVNC 8bpp trigger
-	name := []byte("Intel(r) AMT KVM")
-	si := make([]byte, 24+len(name))
-	copy(si, b.serverInit[:24])
-	binary.BigEndian.PutUint32(si[20:24], uint32(len(name)))
-	copy(si[24:], name)
-	ws.WriteMessage(websocket.BinaryMessage, si)
+	// Send ServerInit — optionally rewrite name for noVNC 8bpp trigger (iDRAC8)
+	if b.RewriteName {
+		name := []byte("Intel(r) AMT KVM")
+		si := make([]byte, 24+len(name))
+		copy(si, b.serverInit[:24])
+		binary.BigEndian.PutUint32(si[20:24], uint32(len(name)))
+		copy(si[24:], name)
+		ws.WriteMessage(websocket.BinaryMessage, si)
+	} else {
+		ws.WriteMessage(websocket.BinaryMessage, b.serverInit)
+	}
 
 	log.Printf("VNC bridge: client handshake complete")
 	return nil
