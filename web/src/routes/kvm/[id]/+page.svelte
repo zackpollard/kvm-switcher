@@ -196,12 +196,11 @@
 
 <div class="flex h-[calc(100vh-3.5rem)] flex-col">
 	<!-- Toolbar -->
-	<div class="flex items-center justify-between border-b border-light-200 bg-light-50 px-4 py-2" role="toolbar" aria-label="KVM controls">
-		<div class="flex items-center gap-3">
-			<Button style="border-radius: 0.75rem" href="/" size="tiny" variant="ghost" color="secondary">&larr; Back</Button>
+	<div class="flex flex-wrap items-center justify-between gap-2 border-b border-light-200 bg-light-50 px-4 py-2" role="toolbar" aria-label="KVM controls">
+		<div class="flex items-center gap-2 overflow-hidden">
+			<Button style="border-radius: 0.75rem" href="/" size="tiny" variant="ghost" color="secondary">&larr;</Button>
 			{#if session}
-				<span class="text-sm font-medium text-dark">{session.server_name}</span>
-				<span class="font-mono text-xs text-muted">{session.bmc_ip}</span>
+				<span class="truncate text-sm font-medium text-dark">{session.server_name}</span>
 				{#if reconnecting}
 					<span class="flex items-center gap-1.5 text-xs text-warning" aria-live="polite">
 						<span class="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-warning-500" aria-hidden="true"></span>
@@ -226,7 +225,7 @@
 			{/if}
 		</div>
 
-		<div class="flex items-center gap-2">
+		<div class="flex flex-wrap items-center gap-1">
 			{#if viewerCount > 0}
 				<ViewerPresence
 					{viewers}
