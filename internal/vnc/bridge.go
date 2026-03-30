@@ -31,8 +31,9 @@ type Bridge struct {
 	FilterEncodings bool       // true = rewrite SetEncodings to Raw only (iDRAC8)
 	RewriteName     bool       // true = rewrite ServerInit name to Intel AMT (iDRAC8 8bpp)
 
-	mu      sync.Mutex
-	running bool
+	mu           sync.Mutex
+	running      bool
+	broadcasting bool
 
 	// Multi-viewer state
 	clients   map[*websocket.Conn]*wsClient
@@ -160,57 +161,27 @@ func (b *Bridge) ServeWebSocketWithControl(ws *websocket.Conn, inputAllowed func
 
 	log.Printf("VNC bridge: client connected [%d total]", numClients)
 
-	var retErr error
-	if numClients == 1 {
-		// Single client: direct pipe for best performance (zero-copy)
-		retErr = b.serveSingleClient(ws, inputAllowed)
-	} else {
-		// Multiple clients: just read input, broadcast is handled elsewhere
-		retErr = b.readClientInput(ws, inputAllowed)
-	}
+	// Ensure the broadcast loop is running (reads BMC → writes to all clients)
+	b.ensureBroadcast()
+
+	// This goroutine handles client → BMC input only.
+	// BMC → client is handled by the broadcast loop.
+	retErr := b.readClientInput(ws, inputAllowed)
 
 	log.Printf("VNC bridge: client disconnected [%d remaining]", b.clientCount())
 	return retErr
 }
 
-// serveSingleClient runs the original direct pipe between one WS client
-// and the BMC. No allocations, no copies, minimal latency. If a second
-// client connects, the pipe is broken and both clients switch to broadcast.
-func (b *Bridge) serveSingleClient(ws *websocket.Conn, inputAllowed func() bool) error {
-	errCh := make(chan error, 2)
-
-	// BMC → client (direct pipe)
-	go func() {
-		buf := make([]byte, 262144) // 256KB
-		for {
-			n, err := b.conn.Read(buf)
-			if err != nil {
-				errCh <- fmt.Errorf("BMC read: %w", err)
-				return
-			}
-
-			// Check if more clients joined — switch to broadcast
-			if b.clientCount() > 1 {
-				// Send this chunk to ALL clients, then switch to broadcast mode
-				b.broadcastToAll(buf[:n])
-				// Start broadcast loop for remaining data
-				errCh <- b.runBroadcast()
-				return
-			}
-
-			if err := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-				errCh <- fmt.Errorf("WS write: %w", err)
-				return
-			}
-		}
-	}()
-
-	// Client → BMC
-	go func() {
-		errCh <- b.readClientInput(ws, inputAllowed)
-	}()
-
-	return <-errCh
+// ensureBroadcast starts the broadcast loop if it isn't already running.
+func (b *Bridge) ensureBroadcast() {
+	b.mu.Lock()
+	if b.broadcasting {
+		b.mu.Unlock()
+		return
+	}
+	b.broadcasting = true
+	b.mu.Unlock()
+	go b.runBroadcast()
 }
 
 // broadcastToAll sends data to all registered clients.
@@ -233,6 +204,11 @@ func (b *Bridge) broadcastToAll(data []byte) {
 // runBroadcast reads from BMC and broadcasts to all clients until
 // the BMC connection drops or the bridge stops.
 func (b *Bridge) runBroadcast() error {
+	defer func() {
+		b.mu.Lock()
+		b.broadcasting = false
+		b.mu.Unlock()
+	}()
 	buf := make([]byte, 262144)
 	for {
 		if !b.Running() {
