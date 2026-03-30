@@ -27,6 +27,7 @@ type Bridge struct {
 	target     string
 	password   string
 	conn       net.Conn
+	connWriteMu sync.Mutex // serialise writes to b.conn from multiple clients
 	serverInit []byte // saved for replay to new clients
 
 	mu      sync.Mutex
@@ -133,7 +134,7 @@ func (b *Bridge) broadcastLoop() {
 			go func(ws *websocket.Conn, client *wsClient) {
 				defer wg.Done()
 				client.writeMu.Lock()
-				ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
 				if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
 					log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
 					ws.Close()
@@ -264,8 +265,11 @@ func (b *Bridge) readClientInput(ws *websocket.Conn, inputAllowed func() bool) e
 			data = rewriteSetEncodings()
 		}
 
-		if _, err := b.conn.Write(data); err != nil {
-			return fmt.Errorf("BMC write: %w", err)
+		b.connWriteMu.Lock()
+		_, writeErr := b.conn.Write(data)
+		b.connWriteMu.Unlock()
+		if writeErr != nil {
+			return fmt.Errorf("BMC write: %w", writeErr)
 		}
 	}
 }
