@@ -19,25 +19,23 @@ import (
 type wsClient struct {
 	ws      *websocket.Conn
 	hasCtrl func() bool // nil means all input allowed
-	writeMu sync.Mutex  // serialise writes to this WS
 }
 
 // Bridge holds a persistent VNC TCP connection to a BMC.
 type Bridge struct {
-	target     string
-	password   string
-	conn       net.Conn
-	connWriteMu sync.Mutex // serialise writes to b.conn from multiple clients
-	serverInit []byte // saved for replay to new clients
-	FilterEncodings bool // true = rewrite SetEncodings to Raw only (iDRAC8)
+	target          string
+	password        string
+	conn            net.Conn
+	connWriteMu     sync.Mutex // serialise writes to b.conn from multiple clients
+	serverInit      []byte     // saved for replay to new clients
+	FilterEncodings bool       // true = rewrite SetEncodings to Raw only (iDRAC8)
 
 	mu      sync.Mutex
 	running bool
 
-	// Multi-viewer fan-out
+	// Multi-viewer state
 	clients   map[*websocket.Conn]*wsClient
 	clientsMu sync.Mutex
-	broadcast chan struct{} // closed when broadcast goroutine is running
 }
 
 func NewBridge(target, password string) *Bridge {
@@ -78,86 +76,8 @@ func (b *Bridge) Start() error {
 	b.running = true
 	b.mu.Unlock()
 
-	// Start the broadcast goroutine (BMC -> all clients)
-	b.startBroadcast()
-
 	log.Printf("VNC bridge: connected to %s", b.target)
 	return nil
-}
-
-// startBroadcast launches the background goroutine that reads from the BMC
-// TCP connection and fans out to all registered WebSocket clients.
-// Safe to call multiple times; only the first call starts the goroutine.
-func (b *Bridge) startBroadcast() {
-	b.mu.Lock()
-	if b.broadcast != nil {
-		b.mu.Unlock()
-		return
-	}
-	b.broadcast = make(chan struct{})
-	b.mu.Unlock()
-
-	go b.broadcastLoop()
-}
-
-// broadcastLoop reads from b.conn and writes to all registered clients.
-func (b *Bridge) broadcastLoop() {
-	defer func() {
-		b.mu.Lock()
-		b.broadcast = nil
-		b.mu.Unlock()
-	}()
-
-	buf := make([]byte, 262144) // 256KB — reduces read syscalls for large VNC frames
-	for {
-		if !b.Running() {
-			return
-		}
-
-		n, err := b.conn.Read(buf)
-		if err != nil {
-			if !b.Running() {
-				return // normal shutdown
-			}
-			log.Printf("VNC bridge: BMC read error in broadcast: %v", err)
-			return
-		}
-
-		data := make([]byte, n)
-		copy(data, buf[:n])
-
-		// Fan out to all connected clients concurrently but wait for all
-		// writes to complete before reading the next BMC chunk. This ensures
-		// correct ordering of VNC data within each client's stream.
-		b.clientsMu.Lock()
-		var toRemove []*websocket.Conn
-		var wg sync.WaitGroup
-		for ws, client := range b.clients {
-			wg.Add(1)
-			go func(ws *websocket.Conn, client *wsClient) {
-				defer wg.Done()
-				ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
-				if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
-					log.Printf("VNC bridge: broadcast write failed: %v", err)
-					ws.Close()
-					b.clientsMu.Lock()
-					toRemove = append(toRemove, ws)
-					b.clientsMu.Unlock()
-				}
-				ws.SetWriteDeadline(time.Time{})
-			}(ws, client)
-		}
-		b.clientsMu.Unlock()
-		wg.Wait()
-		// Clean up failed clients after all writes complete
-		if len(toRemove) > 0 {
-			b.clientsMu.Lock()
-			for _, ws := range toRemove {
-				delete(b.clients, ws)
-			}
-			b.clientsMu.Unlock()
-		}
-	}
 }
 
 func (b *Bridge) Stop() {
@@ -182,40 +102,40 @@ func (b *Bridge) Stop() {
 	b.clientsMu.Unlock()
 }
 
+func (b *Bridge) clientCount() int {
+	b.clientsMu.Lock()
+	defer b.clientsMu.Unlock()
+	return len(b.clients)
+}
+
 // ServeWebSocket handles a noVNC client with all input forwarded.
-// Backward-compatible wrapper around ServeWebSocketWithControl.
 func (b *Bridge) ServeWebSocket(ws *websocket.Conn) error {
 	return b.ServeWebSocketWithControl(ws, nil)
 }
 
 // ServeWebSocketWithControl handles a noVNC WebSocket client with optional
-// input gating. If inputAllowed is non-nil, keyboard and mouse events (VNC
-// types 4 and 5) are only forwarded to the BMC when inputAllowed() returns
-// true. Types 0 (SetPixelFormat), 2 (SetEncodings), and 3
-// (FramebufferUpdateRequest) are always forwarded.
-// Blocks until the client disconnects or the bridge stops.
+// input gating. Blocks until the client disconnects or the bridge stops.
 func (b *Bridge) ServeWebSocketWithControl(ws *websocket.Conn, inputAllowed func() bool) error {
 	if !b.Running() {
 		return fmt.Errorf("bridge not running")
 	}
 
-	// Check if the broadcast loop is alive — if it exited, the BMC connection
-	// is dead and we need to reconnect. Skip the TCP liveness probe when the
-	// broadcast loop is running (it owns the read side of b.conn).
-	b.mu.Lock()
-	broadcastDead := b.broadcast == nil
-	b.mu.Unlock()
-	if broadcastDead {
-		// No broadcast loop — reconnect
-		log.Printf("VNC bridge: broadcast not running, reconnecting...")
-		if b.conn != nil {
+	// Check if BMC connection is still alive (only when no other clients
+	// are using it — avoid interfering with active reads).
+	if b.clientCount() == 0 {
+		b.conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
+		one := make([]byte, 1)
+		_, err := b.conn.Read(one)
+		b.conn.SetReadDeadline(time.Time{})
+		if err != nil && !isTimeout(err) {
+			log.Printf("VNC bridge: TCP connection lost, reconnecting...")
 			b.conn.Close()
-		}
-		b.mu.Lock()
-		b.running = false
-		b.mu.Unlock()
-		if err := b.Start(); err != nil {
-			return fmt.Errorf("reconnect failed: %w", err)
+			b.mu.Lock()
+			b.running = false
+			b.mu.Unlock()
+			if err := b.Start(); err != nil {
+				return fmt.Errorf("reconnect failed: %w", err)
+			}
 		}
 	}
 
@@ -224,13 +144,11 @@ func (b *Bridge) ServeWebSocketWithControl(ws *websocket.Conn, inputAllowed func
 		return fmt.Errorf("client handshake: %w", err)
 	}
 
-	// Register this client for broadcast
-	client := &wsClient{
-		ws:      ws,
-		hasCtrl: inputAllowed,
-	}
+	// Register this client
+	client := &wsClient{ws: ws, hasCtrl: inputAllowed}
 	b.clientsMu.Lock()
 	b.clients[ws] = client
+	numClients := len(b.clients)
 	b.clientsMu.Unlock()
 
 	defer func() {
@@ -239,19 +157,105 @@ func (b *Bridge) ServeWebSocketWithControl(ws *websocket.Conn, inputAllowed func
 		b.clientsMu.Unlock()
 	}()
 
-	log.Printf("VNC bridge: client connected [%d total]", b.clientCount())
+	log.Printf("VNC bridge: client connected [%d total]", numClients)
 
-	// Read from this client (client -> BMC) with input gating.
-	// The BMC -> client direction is handled by broadcastLoop.
-	readErr := b.readClientInput(ws, inputAllowed)
+	var retErr error
+	if numClients == 1 {
+		// Single client: direct pipe for best performance (zero-copy)
+		retErr = b.serveSingleClient(ws, inputAllowed)
+	} else {
+		// Multiple clients: just read input, broadcast is handled elsewhere
+		retErr = b.readClientInput(ws, inputAllowed)
+	}
 
 	log.Printf("VNC bridge: client disconnected [%d remaining]", b.clientCount())
-	return readErr
+	return retErr
+}
+
+// serveSingleClient runs the original direct pipe between one WS client
+// and the BMC. No allocations, no copies, minimal latency. If a second
+// client connects, the pipe is broken and both clients switch to broadcast.
+func (b *Bridge) serveSingleClient(ws *websocket.Conn, inputAllowed func() bool) error {
+	errCh := make(chan error, 2)
+
+	// BMC → client (direct pipe)
+	go func() {
+		buf := make([]byte, 262144) // 256KB
+		for {
+			n, err := b.conn.Read(buf)
+			if err != nil {
+				errCh <- fmt.Errorf("BMC read: %w", err)
+				return
+			}
+
+			// Check if more clients joined — switch to broadcast
+			if b.clientCount() > 1 {
+				// Send this chunk to ALL clients, then switch to broadcast mode
+				b.broadcastToAll(buf[:n])
+				// Start broadcast loop for remaining data
+				errCh <- b.runBroadcast()
+				return
+			}
+
+			if err := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
+				errCh <- fmt.Errorf("WS write: %w", err)
+				return
+			}
+		}
+	}()
+
+	// Client → BMC
+	go func() {
+		errCh <- b.readClientInput(ws, inputAllowed)
+	}()
+
+	return <-errCh
+}
+
+// broadcastToAll sends data to all registered clients.
+func (b *Bridge) broadcastToAll(data []byte) {
+	b.clientsMu.Lock()
+	var wg sync.WaitGroup
+	for ws := range b.clients {
+		wg.Add(1)
+		go func(ws *websocket.Conn) {
+			defer wg.Done()
+			ws.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			ws.WriteMessage(websocket.BinaryMessage, data)
+			ws.SetWriteDeadline(time.Time{})
+		}(ws)
+	}
+	b.clientsMu.Unlock()
+	wg.Wait()
+}
+
+// runBroadcast reads from BMC and broadcasts to all clients until
+// the BMC connection drops or the bridge stops.
+func (b *Bridge) runBroadcast() error {
+	buf := make([]byte, 262144)
+	for {
+		if !b.Running() {
+			return nil
+		}
+
+		n, err := b.conn.Read(buf)
+		if err != nil {
+			if !b.Running() {
+				return nil
+			}
+			return fmt.Errorf("BMC read: %w", err)
+		}
+
+		// Copy data for goroutines (buf is reused)
+		data := make([]byte, n)
+		copy(data, buf[:n])
+
+		b.broadcastToAll(data)
+	}
 }
 
 // readClientInput reads VNC messages from a WebSocket client and forwards
-// them to the BMC. Keyboard (type 4) and mouse (type 5) events are gated
-// by the inputAllowed function. Other message types are always forwarded.
+// them to the BMC with input gating.
 func (b *Bridge) readClientInput(ws *websocket.Conn, inputAllowed func() bool) error {
 	for {
 		_, data, err := ws.ReadMessage()
@@ -264,13 +268,12 @@ func (b *Bridge) readClientInput(ws *websocket.Conn, inputAllowed func() bool) e
 
 		msgType := data[0]
 
-		// Input gating: keyboard (4) and mouse (5) are gated
+		// Input gating
 		if (msgType == 4 || msgType == 5) && inputAllowed != nil && !inputAllowed() {
-			continue // drop input from non-controlling viewer
+			continue
 		}
 
-		// iDRAC8 fails silently with unsupported encodings — filter to Raw only.
-		// iDRAC9 and others handle Tight/ZRLE fine, so pass through as-is.
+		// Encoding filter for iDRAC8
 		if b.FilterEncodings && msgType == 2 && len(data) >= 4 {
 			data = rewriteSetEncodings()
 		}
@@ -282,13 +285,6 @@ func (b *Bridge) readClientInput(ws *websocket.Conn, inputAllowed func() bool) e
 			return fmt.Errorf("BMC write: %w", writeErr)
 		}
 	}
-}
-
-// clientCount returns the number of currently connected clients.
-func (b *Bridge) clientCount() int {
-	b.clientsMu.Lock()
-	defer b.clientsMu.Unlock()
-	return len(b.clients)
 }
 
 func isTimeout(err error) bool {
