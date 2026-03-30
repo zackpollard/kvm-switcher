@@ -632,6 +632,13 @@ func (s *Server) performISODownload(dl *ISODownload, uploadedBy, remoteAddr stri
 		return
 	}
 
+	// Clean up orphaned partial files (exist on disk but not in DB)
+	if _, statErr := os.Stat(destPath); statErr == nil {
+		if dbISO, _ := s.DB.GetISO(dl.Filename); dbISO == nil {
+			os.Remove(destPath)
+		}
+	}
+
 	// Create destination file atomically
 	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
