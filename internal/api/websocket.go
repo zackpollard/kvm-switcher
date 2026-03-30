@@ -67,6 +67,7 @@ func (s *Server) wsUpgrader() *websocket.Upgrader {
 // @Failure 404 {object} models.ErrorResponse "Session not found or not connected"
 // @Router /ws/kvm/{id} [get]
 func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("KVM WS request URL: %s (query: %s)", r.URL.Path, r.URL.RawQuery)
 	sessionID := r.PathValue("id")
 
 	session, ok := s.Sessions.Get(sessionID)
@@ -376,6 +377,16 @@ func (s *Server) ensureVNCBridge(session *models.KVMSession) (*vncbridge.Bridge,
 	s.vncConnsMu.Unlock()
 
 	bridge = vncbridge.NewBridge(session.KVMTarget, session.KVMPassword)
+
+	// iDRAC8 needs encoding filtering (Raw only) — its VNC server fails
+	// silently with Tight/ZRLE. iDRAC9 handles all encodings fine.
+	for _, srv := range s.Config.Servers {
+		if srv.Name == session.ServerName && srv.BoardType == "dell_idrac8" {
+			bridge.FilterEncodings = true
+			break
+		}
+	}
+
 	if err := bridge.Start(); err != nil {
 		return nil, err
 	}

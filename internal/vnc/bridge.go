@@ -29,6 +29,7 @@ type Bridge struct {
 	conn       net.Conn
 	connWriteMu sync.Mutex // serialise writes to b.conn from multiple clients
 	serverInit []byte // saved for replay to new clients
+	FilterEncodings bool // true = rewrite SetEncodings to Raw only (iDRAC8)
 
 	mu      sync.Mutex
 	running bool
@@ -268,8 +269,9 @@ func (b *Bridge) readClientInput(ws *websocket.Conn, inputAllowed func() bool) e
 			continue // drop input from non-controlling viewer
 		}
 
-		// iDRAC8 fails silently with unsupported encodings
-		if msgType == 2 && len(data) >= 4 {
+		// iDRAC8 fails silently with unsupported encodings — filter to Raw only.
+		// iDRAC9 and others handle Tight/ZRLE fine, so pass through as-is.
+		if b.FilterEncodings && msgType == 2 && len(data) >= 4 {
 			data = rewriteSetEncodings()
 		}
 
