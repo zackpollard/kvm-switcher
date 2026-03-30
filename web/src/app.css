@@ -1,20 +1,10 @@
+@import 'tailwindcss';
 @import '@immich/ui/theme/default.css';
+@source "../node_modules/@immich/ui";
 
-/* @immich/ui's semi-round shape doesn't visibly override the base
-   rounded-md because tailwind-merge deduplicates the classes. Override
-   all button and anchor elements to use 12px border-radius for a
-   visible semi-round appearance. Does not affect rounded-full (pill)
-   or rounded-none (square) elements. */
+/* Fix semi-round button shape — @immich/ui's tailwind-merge strips
+   class-level overrides, so use a global CSS rule instead. */
 button:not([class*="rounded-full"]):not([class*="rounded-none"]),
 a[role]:not([class*="rounded-full"]):not([class*="rounded-none"]) {
   border-radius: 0.75rem !important;
-}
-
-/* @immich/ui dark mode colors are pastel/washed out for an
-   infrastructure panel. Override to richer, more vibrant colors. */
-.dark {
-  --immich-ui-primary-500: oklch(0.65 0.15 260);
-  --immich-ui-primary-400: oklch(0.55 0.13 260);
-  --immich-ui-danger-500: oklch(0.65 0.2 25);
-  --immich-ui-danger-400: oklch(0.55 0.17 25);
 }
