@@ -11,7 +11,7 @@
 - [x] NFS server (go-nfs) for MegaRAC to mount ISOs from the KVM Switcher
 - [x] "Mount from Library" in virtual media panel with auto-URL generation
 - [x] Download progress with rate and ETA
-- [ ] iDRAC8 virtual media (Redfish InsertMedia returns 500 on firmware 2.x — needs proprietary API)
+- [ ] iDRAC8 virtual media (requires Enterprise license — Express only supports basic VNC KVM)
 
 ### Serial over LAN (SOL)
 - [ ] Text-based console access alongside KVM
