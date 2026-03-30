@@ -14,8 +14,7 @@
 	let requesting = $state(false);
 	let error = $state('');
 
-	let controller = $derived(viewers.find((v) => v.has_control));
-	let nonControllers = $derived(viewers.filter((v) => !v.has_control));
+	let iHaveControl = $derived(viewers.some((v) => v.id === myViewerId && v.has_control));
 
 	function getInitial(name: string): string {
 		if (name.includes('.')) return name.split('.')[0].charAt(0).toUpperCase(); // IP: use first octet
@@ -65,10 +64,10 @@
 	</div>
 
 	{#if viewers.length > 1}
-		{#if controller}
+		{#if iHaveControl}
 			<Button
 				style="border-radius: 0.75rem"
-				onclick={() => handleReleaseControl(controller.id)}
+				onclick={() => handleReleaseControl(myViewerId)}
 				disabled={requesting}
 				size="tiny"
 				variant="ghost"
@@ -76,19 +75,18 @@
 			>
 				{requesting ? 'Releasing...' : 'Release Control'}
 			</Button>
-		{/if}
-		{#each nonControllers as viewer (viewer.id)}
+		{:else}
 			<Button
 				style="border-radius: 0.75rem"
-				onclick={() => handleRequestControl(viewer.id)}
+				onclick={() => handleRequestControl(myViewerId)}
 				disabled={requesting}
 				size="tiny"
 				variant="ghost"
 				color="primary"
 			>
-				{requesting ? 'Requesting...' : `Give Control to ${viewer.display_name}`}
+				{requesting ? 'Requesting...' : 'Request Control'}
 			</Button>
-		{/each}
+		{/if}
 	{/if}
 
 	{#if error}
