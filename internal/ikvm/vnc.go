@@ -219,8 +219,6 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn, frameCh <-
 		w := b.decoder.Width
 		h := b.decoder.Height
 		fb := b.decoder.Framebuffer
-		dirty := b.fbDirty
-		b.fbDirty = false
 
 		if w == 0 || h == 0 || len(fb) < int(w)*int(h)*4 {
 			b.fbMu.Unlock()
@@ -232,17 +230,13 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn, frameCh <-
 		if resChanged {
 			lastW = w
 			lastH = h
-			// Request a full refresh for the new resolution -- the BMC's first
-			// frame after a resolution change is often a small diff that produces
-			// garbage because previousYUV was just reset to zeros.
 			if b.client != nil {
 				go b.client.SendHeader(IVTPRefreshVideoScreen, 0, 0)
 			}
 		}
 
 		// Copy framebuffer while holding lock, swapping B↔R channels.
-		// The decoder writes BGRA but noVNC expects RGBA (it sends a
-		// SetPixelFormat with red-shift=0 which we accept).
+		// The decoder writes BGRA but noVNC expects RGBA.
 		size := int(w) * int(h) * 4
 		pixelData := make([]byte, size)
 		for i := 0; i < size; i += 4 {
@@ -252,10 +246,6 @@ func (b *Bridge) sendVNCFrames(ctx context.Context, ws WebSocketConn, frameCh <-
 			pixelData[i+3] = fb[i+3] // A ← byte 3
 		}
 		b.fbMu.Unlock()
-
-		if !dirty && !resChanged {
-			continue
-		}
 
 		// Send DesktopSize if resolution changed
 		if resChanged {
