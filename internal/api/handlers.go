@@ -42,6 +42,9 @@ type Server struct {
 	VNCBridges   map[string]*vnc.Bridge         // active VNC bridges by session ID
 	vncConnsMu   sync.Mutex
 
+	WSSProxies   map[string]*wssProxy           // shared WSS backend connections by session ID
+	wssProxiesMu sync.Mutex
+
 	Downloads    map[string]*ISODownload        // active ISO downloads by download ID
 	downloadsMu  sync.Mutex
 
@@ -66,6 +69,7 @@ func NewServerWithStore(cfg *models.AppConfig, sessions models.SessionStoreInter
 		BMCCreds:         make(map[string]*models.BMCCredEntry),
 		Bridges:          make(map[string]*ikvm.Bridge),
 		VNCBridges:       make(map[string]*vnc.Bridge),
+		WSSProxies:       make(map[string]*wssProxy),
 		Downloads:        make(map[string]*ISODownload),
 		ViewerRegistries: make(map[string]*ViewerRegistry),
 		StatusCache:      sc,
@@ -87,6 +91,7 @@ func newServerCore(cfg *models.AppConfig) *Server {
 		BMCCreds:         make(map[string]*models.BMCCredEntry),
 		Bridges:          make(map[string]*ikvm.Bridge),
 		VNCBridges:       make(map[string]*vnc.Bridge),
+		WSSProxies:       make(map[string]*wssProxy),
 		Downloads:        make(map[string]*ISODownload),
 		ViewerRegistries: make(map[string]*ViewerRegistry),
 		StatusCache:      sc,
@@ -520,9 +525,10 @@ func (s *Server) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Stop any running bridges for this session
+	// Stop any running bridges/proxies for this session
 	s.StopIKVMBridge(id)
 	s.StopVNCBridge(id)
+	s.StopWSSProxy(id)
 
 	session.Status = models.SessionDisconnected
 	s.Sessions.Set(session)

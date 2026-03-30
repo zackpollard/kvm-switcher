@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +19,20 @@ import (
 	"github.com/zackpollard/kvm-switcher/internal/tlsutil"
 	vncbridge "github.com/zackpollard/kvm-switcher/internal/vnc"
 )
+
+// wssClient tracks a single WebSocket viewer connected to a WSS proxy.
+type wssClient struct {
+	ws      *websocket.Conn
+	writeMu sync.Mutex // serialise writes to this client
+}
+
+// wssProxy holds a shared backend WSS connection and fans out to multiple clients.
+type wssProxy struct {
+	backend  *websocket.Conn
+	clients  map[*websocket.Conn]*wssClient
+	mu       sync.Mutex
+	done     chan struct{} // closed when broadcast loop exits
+}
 
 // wsUpgrader returns a WebSocket upgrader that respects the configured CORS origins.
 func (s *Server) wsUpgrader() *websocket.Upgrader {
@@ -93,6 +108,9 @@ func (s *Server) HandleKVMWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // proxyWSS proxies browser WebSocket to a remote WSS endpoint (iDRAC9 HTML5 KVM).
+// Multiple clients share a single backend WSS connection to the BMC. The first
+// client triggers the backend connection; subsequent clients reuse it. Input is
+// gated so only the controlling viewer's messages reach the BMC.
 func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
 	log.Printf("Session %s: proxying WebSocket to WSS %s", session.ID, session.KVMTarget)
 
@@ -102,11 +120,102 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 	registry := s.ensureViewerRegistry(session.ID)
 	registry.Add(viewerID, displayName, viewerIP)
 	defer registry.Remove(viewerID)
-	if registry.Count() > 1 {
-		log.Printf("Session %s: WARNING: multiple viewers on WSS session; input sharing not fully supported for this mode", session.ID)
+
+	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
+		return
+	}
+	defer clientConn.Close()
+
+	// Ensure the shared backend WSS connection exists
+	proxy, err := s.ensureWSSProxy(session)
+	if err != nil {
+		log.Printf("Session %s: WSS proxy backend failed: %v", session.ID, err)
+		return
 	}
 
-	// The iDRAC9 WSS endpoint needs the session cookie + XSRF token for auth.
+	// Register this client for broadcast
+	client := &wssClient{ws: clientConn}
+	proxy.mu.Lock()
+	proxy.clients[clientConn] = client
+	clientCount := len(proxy.clients)
+	proxy.mu.Unlock()
+
+	defer func() {
+		proxy.mu.Lock()
+		delete(proxy.clients, clientConn)
+		remaining := len(proxy.clients)
+		proxy.mu.Unlock()
+		log.Printf("Session %s: WSS viewer %s disconnected [%d remaining]", session.ID, viewerID, remaining)
+
+		// If no clients left, tear down the backend connection
+		if remaining == 0 {
+			s.StopWSSProxy(session.ID)
+		}
+	}()
+
+	log.Printf("Session %s: WSS viewer %s (%s) connected [%d total]", session.ID, viewerID, displayName, clientCount)
+
+	// Read from this client (client -> BMC) with input gating.
+	// The BMC -> client direction is handled by the broadcast goroutine.
+	inputAllowed := func() bool {
+		return registry.HasControl(viewerID)
+	}
+
+	for {
+		select {
+		case <-proxy.done:
+			return // backend closed
+		default:
+		}
+
+		msgType, data, err := clientConn.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				log.Printf("Session %s: WSS client read error: %v", session.ID, err)
+			}
+			return
+		}
+
+		// Only forward input from the controlling viewer
+		if !inputAllowed() {
+			continue
+		}
+
+		proxy.mu.Lock()
+		backend := proxy.backend
+		proxy.mu.Unlock()
+		if backend == nil {
+			return
+		}
+
+		if err := backend.WriteMessage(msgType, data); err != nil {
+			log.Printf("Session %s: WSS backend write error: %v", session.ID, err)
+			return
+		}
+	}
+}
+
+// ensureWSSProxy returns the shared WSS proxy for the session, creating one if needed.
+func (s *Server) ensureWSSProxy(session *models.KVMSession) (*wssProxy, error) {
+	s.wssProxiesMu.Lock()
+	proxy := s.WSSProxies[session.ID]
+	if proxy != nil {
+		// Check if the backend is still alive
+		select {
+		case <-proxy.done:
+			// Backend died, need a new one
+			delete(s.WSSProxies, session.ID)
+			proxy = nil
+		default:
+			s.wssProxiesMu.Unlock()
+			return proxy, nil
+		}
+	}
+	s.wssProxiesMu.Unlock()
+
+	// Build auth headers for the iDRAC9 WSS endpoint
 	s.bmcCredsMu.Lock()
 	credEntry := s.BMCCreds[session.ID]
 	s.bmcCredsMu.Unlock()
@@ -122,8 +231,8 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 		}
 	}
 
-	// Look up server config for TLS settings.
-	skipVerify := true // default for backward compat
+	// Look up server config for TLS settings
+	skipVerify := true
 	for i := range s.Config.Servers {
 		if s.Config.Servers[i].Name == session.ServerName {
 			skipVerify = tlsutil.SkipVerify(&s.Config.Servers[i])
@@ -138,27 +247,86 @@ func (s *Server) proxyWSS(w http.ResponseWriter, r *http.Request, session *model
 
 	backendConn, _, err := dialer.Dial(session.KVMTarget, headers)
 	if err != nil {
-		log.Printf("Session %s: failed to connect to WSS backend: %v", session.ID, err)
-		http.Error(w, "failed to connect to KVM", http.StatusBadGateway)
+		return nil, fmt.Errorf("WSS backend dial: %w", err)
+	}
+
+	proxy = &wssProxy{
+		backend: backendConn,
+		clients: make(map[*websocket.Conn]*wssClient),
+		done:    make(chan struct{}),
+	}
+
+	// Start the broadcast goroutine (backend -> all clients)
+	go s.wssBroadcastLoop(session.ID, proxy)
+
+	s.wssProxiesMu.Lock()
+	s.WSSProxies[session.ID] = proxy
+	s.wssProxiesMu.Unlock()
+
+	log.Printf("Session %s: WSS backend connection established", session.ID)
+	return proxy, nil
+}
+
+// wssBroadcastLoop reads from the backend WSS connection and fans out to all clients.
+func (s *Server) wssBroadcastLoop(sessionID string, proxy *wssProxy) {
+	defer close(proxy.done)
+
+	for {
+		msgType, data, err := proxy.backend.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				log.Printf("Session %s: WSS backend read error: %v", sessionID, err)
+			}
+			return
+		}
+
+		proxy.mu.Lock()
+		for ws, client := range proxy.clients {
+			client.writeMu.Lock()
+			// Short write deadline to avoid one slow client blocking others
+			ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if err := ws.WriteMessage(msgType, data); err != nil {
+				log.Printf("Session %s: WSS broadcast write failed, removing client: %v", sessionID, err)
+				ws.Close()
+				delete(proxy.clients, ws)
+			}
+			ws.SetWriteDeadline(time.Time{})
+			client.writeMu.Unlock()
+		}
+		proxy.mu.Unlock()
+	}
+}
+
+// StopWSSProxy stops and removes the shared WSS proxy for a session.
+func (s *Server) StopWSSProxy(sessionID string) {
+	s.wssProxiesMu.Lock()
+	proxy := s.WSSProxies[sessionID]
+	delete(s.WSSProxies, sessionID)
+	s.wssProxiesMu.Unlock()
+
+	if proxy == nil {
 		return
 	}
-	defer backendConn.Close()
 
-	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("Session %s: WebSocket upgrade failed: %v", session.ID, err)
-		return
+	// Close the backend connection; this will cause the broadcast loop to exit
+	proxy.mu.Lock()
+	if proxy.backend != nil {
+		proxy.backend.Close()
 	}
-	defer clientConn.Close()
+	// Close all client connections
+	for ws := range proxy.clients {
+		ws.Close()
+	}
+	proxy.clients = make(map[*websocket.Conn]*wssClient)
+	proxy.mu.Unlock()
 
-	log.Printf("Session %s: WebSocket proxy established (WSS)", session.ID)
-	bidirectionalWSProxy(session.ID, clientConn, backendConn)
+	log.Printf("Session %s: WSS proxy stopped", sessionID)
 }
 
 // proxyVNC bridges a browser WebSocket to a raw TCP VNC connection.
-// It handles the VNC handshake with exact message parsing (rewriting ServerInit
-// to trigger noVNC's 8bpp mode), then switches to raw bidirectional proxying
-// with SetEncodings filtering for iDRAC8 compatibility.
+// Multiple clients share a single persistent TCP connection to the BMC via the
+// VNC bridge's fan-out. Input is gated so only the controlling viewer can send
+// keyboard/mouse events.
 func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *models.KVMSession) {
 	log.Printf("Session %s: VNC connect (bridge running=%v)", session.ID, s.vncBridgeRunning(session.ID))
 
@@ -168,9 +336,6 @@ func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *model
 	registry := s.ensureViewerRegistry(session.ID)
 	registry.Add(viewerID, displayName, viewerIP)
 	defer registry.Remove(viewerID)
-	if registry.Count() > 1 {
-		log.Printf("Session %s: WARNING: multiple viewers on VNC session; input sharing not fully supported for this mode", session.ID)
-	}
 
 	clientConn, err := s.wsUpgrader().Upgrade(w, r, nil)
 	if err != nil {
@@ -185,10 +350,14 @@ func (s *Server) proxyVNC(w http.ResponseWriter, r *http.Request, session *model
 		return
 	}
 
-	if err := bridge.ServeWebSocket(clientConn); err != nil {
+	log.Printf("Session %s: VNC viewer %s (%s) connected [%d total]", session.ID, viewerID, displayName, registry.Count())
+
+	if err := bridge.ServeWebSocketWithControl(clientConn, func() bool {
+		return registry.HasControl(viewerID)
+	}); err != nil {
 		log.Printf("Session %s: VNC error: %v", session.ID, err)
 	}
-	log.Printf("Session %s: VNC disconnected", session.ID)
+	log.Printf("Session %s: VNC viewer %s (%s) disconnected [%d remaining]", session.ID, viewerID, displayName, registry.Count())
 }
 
 func (s *Server) ensureVNCBridge(session *models.KVMSession) (*vncbridge.Bridge, error) {
