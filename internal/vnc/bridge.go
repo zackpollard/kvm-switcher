@@ -124,20 +124,29 @@ func (b *Bridge) broadcastLoop() {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
+		// Write to all clients concurrently so one slow client
+		// doesn't block frame delivery to others.
 		b.clientsMu.Lock()
+		var wg sync.WaitGroup
 		for ws, client := range b.clients {
-			client.writeMu.Lock()
-			// Use a short write deadline to avoid one slow client blocking others
-			ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
-			if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
-				log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
-				ws.Close()
-				delete(b.clients, ws)
-			}
-			ws.SetWriteDeadline(time.Time{})
-			client.writeMu.Unlock()
+			wg.Add(1)
+			go func(ws *websocket.Conn, client *wsClient) {
+				defer wg.Done()
+				client.writeMu.Lock()
+				ws.SetWriteDeadline(time.Now().Add(5 * time.Second))
+				if err := ws.WriteMessage(websocket.BinaryMessage, data); err != nil {
+					log.Printf("VNC bridge: broadcast write failed, removing client: %v", err)
+					ws.Close()
+					b.clientsMu.Lock()
+					delete(b.clients, ws)
+					b.clientsMu.Unlock()
+				}
+				ws.SetWriteDeadline(time.Time{})
+				client.writeMu.Unlock()
+			}(ws, client)
 		}
 		b.clientsMu.Unlock()
+		wg.Wait()
 	}
 }
 
