@@ -26,6 +26,42 @@
 	let activeDownloads = $state<ISODownloadStatus[]>([]);
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+	// Rate tracking: store previous downloaded bytes and timestamp per download ID
+	let prevPoll: Record<string, { bytes: number; time: number }> = {};
+	let downloadRates: Record<string, number> = $state({}); // bytes per second
+
+	function updateRates(downloads: ISODownloadStatus[]) {
+		const now = Date.now();
+		for (const dl of downloads) {
+			if (dl.status !== 'downloading') continue;
+			const prev = prevPoll[dl.id];
+			if (prev && now > prev.time) {
+				const elapsed = (now - prev.time) / 1000;
+				const delta = dl.downloaded - prev.bytes;
+				if (elapsed > 0 && delta >= 0) {
+					// Smooth with previous rate (70% new, 30% old)
+					const newRate = delta / elapsed;
+					const oldRate = downloadRates[dl.id] || newRate;
+					downloadRates[dl.id] = newRate * 0.7 + oldRate * 0.3;
+				}
+			}
+			prevPoll[dl.id] = { bytes: dl.downloaded, time: now };
+		}
+	}
+
+	function formatRate(bytesPerSec: number): string {
+		if (bytesPerSec <= 0) return '';
+		return formatBytes(bytesPerSec) + '/s';
+	}
+
+	function formatETA(remaining: number, rate: number): string {
+		if (rate <= 0 || remaining <= 0) return '';
+		const secs = Math.ceil(remaining / rate);
+		if (secs < 60) return `${secs}s`;
+		if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+		return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+	}
+
 	function formatBytes(bytes: number): string {
 		if (bytes === 0) return '0 B';
 		const k = 1024;
@@ -163,6 +199,7 @@
 	async function pollDownloads() {
 		try {
 			const downloads = await fetchISODownloads();
+			updateRates(downloads);
 			const prevDownloading = activeDownloads.filter(d => d.status === 'downloading');
 			activeDownloads = downloads;
 
@@ -368,6 +405,12 @@
 						<span class="text-xs text-muted">
 							{#if dl.status === 'downloading'}
 								{formatBytes(dl.downloaded)}{#if dl.total_bytes > 0} / {formatBytes(dl.total_bytes)}{/if}
+								{#if downloadRates[dl.id] > 0}
+									&nbsp;· {formatRate(downloadRates[dl.id])}
+									{#if dl.total_bytes > 0}
+										&nbsp;· ETA {formatETA(dl.total_bytes - dl.downloaded, downloadRates[dl.id])}
+									{/if}
+								{/if}
 							{:else if dl.status === 'complete'}
 								Complete - {formatBytes(dl.downloaded)}
 							{:else}
